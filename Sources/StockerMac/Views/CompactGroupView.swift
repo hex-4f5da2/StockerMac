@@ -16,8 +16,9 @@ struct CompactGroupView: View {
         store.allRows.filter { store.belongsToGroup(itemID: $0.id, groupID: groupID) }
     }
 
+    private let nameColumnWidth: CGFloat = 82
     private let percentageColumnWidth: CGFloat = 72
-    private let controlsColumnWidth: CGFloat = 40
+    private let columnSpacing: CGFloat = 6
 
     var body: some View {
         ZStack {
@@ -29,10 +30,10 @@ struct CompactGroupView: View {
                     ContentUnavailableView("分组暂无股票", systemImage: "folder", description: Text("退出小窗后可向分组添加股票"))
                 } else {
                     HStack(spacing: 6) {
-                        Text("股票")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("涨跌幅")
-                            .frame(width: percentageColumnWidth, alignment: .leading)
+                        Text(group?.name ?? "小窗行情")
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
                         HStack(spacing: 2) {
                             Button {
                                 isAlwaysOnTop.toggle()
@@ -54,9 +55,7 @@ struct CompactGroupView: View {
                             .help("退出小窗模式")
                             .accessibilityLabel("恢复完整窗口")
                         }
-                        .frame(width: controlsColumnWidth, alignment: .trailing)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -64,14 +63,27 @@ struct CompactGroupView: View {
 
                     Divider()
 
+                    HStack(spacing: columnSpacing) {
+                        Text("股票")
+                            .frame(width: nameColumnWidth, alignment: .leading)
+                        Text("涨跌幅")
+                            .frame(width: percentageColumnWidth, alignment: .leading)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+
+                    Divider()
+
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(spacing: 0) {
                             ForEach(rows) { row in
-                                HStack(spacing: 6) {
+                                HStack(spacing: columnSpacing) {
                                     Text(row.displayName)
                                         .fontWeight(.medium)
                                         .lineLimit(1)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .frame(width: nameColumnWidth, alignment: .leading)
 
                                     if row.quote != nil {
                                         TrendText(value: row.percentage, text: Formatters.percent(row.percentage))
@@ -82,7 +94,6 @@ struct CompactGroupView: View {
                                             .foregroundStyle(.secondary)
                                             .frame(width: percentageColumnWidth, alignment: .leading)
                                     }
-                                    Color.clear.frame(width: controlsColumnWidth, height: 1)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 10)
@@ -98,7 +109,7 @@ struct CompactGroupView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .frame(minWidth: 220, minHeight: 150)
+        .frame(minWidth: 180, minHeight: 150)
         .background(WindowModeResizer(mode: .compact(
             rowCount: rows.count,
             title: group?.name ?? "小窗行情",
@@ -214,9 +225,9 @@ struct WindowModeResizer: NSViewRepresentable {
             window.backgroundColor = .windowBackgroundColor
             setStandardWindowButtons(hidden: false, in: window)
         case let .compact(rowCount, title, isAlwaysOnTop):
-            let height = min(440, max(150, 32 + rowCount * 34))
-            contentSize = NSSize(width: 230, height: height)
-            window.contentMinSize = NSSize(width: 220, height: 150)
+            let height = min(440, max(176, 58 + rowCount * 34))
+            contentSize = NSSize(width: 180, height: height)
+            window.contentMinSize = NSSize(width: 180, height: 176)
             window.styleMask.remove([.titled, .closable, .miniaturizable])
             window.title = title
             window.titleVisibility = .hidden

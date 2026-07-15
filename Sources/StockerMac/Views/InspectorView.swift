@@ -14,17 +14,15 @@ struct InspectorView: View {
                         header(row)
                         if let quote = row.quote {
                             sessionCard(quote)
-                            positionCard(row)
-                            groupCard(row)
-                            updateInfo(quote)
-                        } else {
-                            ProgressView("正在获取行情…").frame(maxWidth: .infinity).padding(.top, 50)
                         }
+                        positionCard(row)
+                        groupCard(row)
+                        if let quote = row.quote { updateInfo(quote) }
                     }
                     .padding(18)
                 }
                 .onAppear { syncInputs(row) }
-                .onChange(of: row.id) { _, _ in syncInputs(row) }
+                .onChange(of: row.item) { _, _ in syncInputs(row) }
             } else {
                 ContentUnavailableView("选择一只股票", systemImage: "cursorarrow.click.2", description: Text("查看价格区间并编辑持仓"))
             }
@@ -48,6 +46,17 @@ struct InspectorView: View {
                     TrendText(value: quote.percentage, text: Formatters.price(quote.current)).font(.largeTitle.bold())
                     TrendText(value: quote.percentage, text: "\(Formatters.signed(quote.change))  \(Formatters.percent(quote.percentage))")
                 }
+            } else if store.isRefreshing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("价格刷新中…")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            } else {
+                Label("价格暂不可用", systemImage: "exclamationmark.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
         }
     }

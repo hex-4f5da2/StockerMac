@@ -4,9 +4,12 @@ import SwiftUI
 
 @MainActor
 final class AppStore: ObservableObject {
+    private static let shanghaiIndexItem = WatchItem(code: "SH000001", name: "上证指数", market: .cn)
+
     @Published var items: [WatchItem]
     @Published var groups: [StockGroup]
     @Published private(set) var groupMemberships: [String: Set<UUID>]
+    @Published private(set) var positionHistory: [PositionHistoryRecord]
     @Published private(set) var quotes: [String: Quote] = [:]
     @Published var selectedMarket: Market?
     @Published var showingPositionsOnly = false
@@ -38,6 +41,7 @@ final class AppStore: ObservableObject {
             let validMemberships = entry.value.intersection(validGroupIDs)
             if !validMemberships.isEmpty { result[entry.key] = validMemberships }
         }
+        positionHistory = state.positionHistory
         provider = state.provider
         refreshInterval = state.refreshInterval
         colorPreference = state.colorPreference
@@ -48,6 +52,11 @@ final class AppStore: ObservableObject {
 
     var allRows: [QuoteRow] {
         items.map { QuoteRow(item: $0, quote: quotes[$0.id]) }
+    }
+
+    var shanghaiIndexRow: QuoteRow {
+        let item = Self.shanghaiIndexItem
+        return QuoteRow(item: item, quote: quotes[item.id])
     }
 
     var positionRows: [QuoteRow] {
@@ -100,11 +109,15 @@ final class AppStore: ObservableObject {
     }
 
     func refresh() async {
-        guard !isRefreshing, !items.isEmpty else { return }
+        guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            let fetched = try await service.fetchQuotes(for: items, provider: provider)
+            var quoteItems = items
+            if !quoteItems.contains(where: { $0.id == Self.shanghaiIndexItem.id }) {
+                quoteItems.append(Self.shanghaiIndexItem)
+            }
+            let fetched = try await service.fetchQuotes(for: quoteItems, provider: provider)
             quotes.merge(Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0) })) { _, new in new }
             lastUpdated = Date()
             errorMessage = nil
@@ -290,6 +303,38 @@ final class AppStore: ObservableObject {
         persist()
     }
 
+    @discardableResult
+    func clearAllPositions(at closedAt: Date = Date()) -> [PositionHistoryRecord] {
+        let positionedIndices = items.indices.filter { items[$0].quantity > 0 }
+        guard !positionedIndices.isEmpty else { return [] }
+
+        let clearedIDs = Set(positionedIndices.map { items[$0].id })
+        let records = positionedIndices.map { index in
+            let item = items[index]
+            let quote = quotes[item.id]
+            return PositionHistoryRecord(
+                code: item.code,
+                name: QuoteRow(item: item, quote: quote).displayName,
+                market: item.market,
+                costPrice: item.costPrice,
+                quantity: item.quantity,
+                closedPrice: quote.map(\.current),
+                closedAt: closedAt
+            )
+        }
+
+        positionHistory.insert(contentsOf: records, at: 0)
+        for index in positionedIndices {
+            items[index].costPrice = 0
+            items[index].quantity = 0
+        }
+        if showingPositionsOnly, let selectedID, clearedIDs.contains(selectedID) {
+            self.selectedID = nil
+        }
+        persist()
+        return records
+    }
+
     func persist() {
         stateStore.save(PersistedState(
             items: items,
@@ -298,7 +343,8 @@ final class AppStore: ObservableObject {
             colorPreference: colorPreference,
             statusBarDisplayMode: statusBarDisplayMode,
             groups: groups,
-            groupMemberships: groupMemberships
+            groupMemberships: groupMemberships,
+            positionHistory: positionHistory
         ))
     }
 

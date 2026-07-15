@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var compactGroupID: UUID?
     @State private var pendingCompactGroupID: UUID?
     @State private var isCompactWindowPinned = false
+    @State private var isShowingPositionHistory = false
+    @State private var isConfirmingClearPositions = false
 
     var body: some View {
         Group {
@@ -29,6 +31,15 @@ struct ContentView: View {
                 compactGroupID = pendingCompactGroupID
                 isShowingCompactGroupPicker = false
             }
+        }
+        .sheet(isPresented: $isShowingPositionHistory) {
+            PositionHistoryView()
+        }
+        .alert("确认清空全部仓位？", isPresented: $isConfirmingClearPositions) {
+            Button("取消", role: .cancel) {}
+            Button("清仓", role: .destructive) { store.clearAllPositions() }
+        } message: {
+            Text("将结清当前 \(store.positionRows.count) 个持仓。自选股票和分组不会删除，本次持仓数据会保存到清仓历史。")
         }
         .alert("无法更新行情", isPresented: Binding(
             get: { store.errorMessage != nil },
@@ -58,6 +69,15 @@ struct ContentView: View {
                 Button { isShowingBatchDelete = true } label: { Label("批量删除", systemImage: "trash") }
                     .disabled(store.rows.isEmpty)
                     .help("批量删除当前列表中的股票")
+                Button { isShowingPositionHistory = true } label: {
+                    Label("清仓历史", systemImage: "clock.arrow.circlepath")
+                }
+                .help("查看清仓历史")
+                Button { isConfirmingClearPositions = true } label: {
+                    Label("清仓", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+                .disabled(store.positionRows.isEmpty)
+                .help("清空全部仓位并保存历史")
                 Button {
                     pendingCompactGroupID = compactGroupID.flatMap { id in
                         store.groups.contains(where: { $0.id == id }) ? id : nil

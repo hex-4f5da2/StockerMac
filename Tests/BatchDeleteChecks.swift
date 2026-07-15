@@ -39,6 +39,25 @@ enum BatchDeleteChecks {
         precondition(saved.groupMemberships[first.id] == nil)
         precondition(saved.groupMemberships[second.id] == [group.id])
 
-        print("Batch delete checks passed: items, selection, memberships and persistence")
+        let closedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        store.updatePosition(id: second.id, costPrice: 180, quantity: 5)
+        let records = store.clearAllPositions(at: closedAt)
+        precondition(records.count == 1)
+        precondition(records[0].code == second.code)
+        precondition(records[0].costPrice == 180)
+        precondition(records[0].quantity == 5)
+        precondition(records[0].closedPrice == nil)
+        precondition(records[0].closedAt == closedAt)
+        precondition(store.items == [second])
+        precondition(store.items[0].costPrice == 0)
+        precondition(store.items[0].quantity == 0)
+        precondition(store.groupIDs(for: second.id) == [group.id])
+
+        let clearedState = try! JSONDecoder().decode(PersistedState.self, from: defaults.data(forKey: key)!)
+        precondition(clearedState.items.map(\.id) == [second.id])
+        precondition(clearedState.positionHistory == records)
+        precondition(clearedState.groupMemberships[second.id] == [group.id])
+
+        print("Batch delete/clear checks passed: items, selection, memberships, history and persistence")
     }
 }

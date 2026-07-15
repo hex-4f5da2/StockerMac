@@ -7,6 +7,7 @@ struct DashboardView: View {
         VStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
+                    MarketIndexCard(row: store.shanghaiIndexRow)
                     SummaryCard(title: "持仓市值", value: Formatters.compact(store.summary.marketValue), subtitle: "跨市场未换汇", icon: "chart.pie.fill")
                     SummaryCard(title: "今日盈亏", value: Formatters.signed(store.summary.dayProfit), subtitle: "按最新涨跌额", icon: "sun.max.fill", trend: store.summary.dayProfit)
                     SummaryCard(title: "累计盈亏", value: Formatters.signed(store.summary.totalProfit), subtitle: "相对持仓成本", icon: "waveform.path.ecg", trend: store.summary.totalProfit)
@@ -24,6 +25,37 @@ struct DashboardView: View {
             }
         }
         .navigationTitle(store.selectedCollectionTitle)
+    }
+}
+
+private struct MarketIndexCard: View {
+    let row: QuoteRow
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.title3)
+                .foregroundStyle(StockerTheme.accent)
+                .frame(width: 34, height: 34)
+                .background(StockerTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("上证指数").font(.caption).foregroundStyle(.secondary)
+                if row.quote != nil {
+                    TrendText(value: row.percentage, text: Formatters.price(row.current))
+                        .font(.title3.bold())
+                    TrendText(
+                        value: row.percentage,
+                        text: "\(Formatters.signed(row.change))  \(Formatters.percent(row.percentage))"
+                    )
+                    .font(.caption2)
+                } else {
+                    ProgressView().controlSize(.small).frame(height: 39, alignment: .leading)
+                }
+            }
+        }
+        .frame(minWidth: 142, alignment: .leading)
+        .stockerCard()
     }
 }
 

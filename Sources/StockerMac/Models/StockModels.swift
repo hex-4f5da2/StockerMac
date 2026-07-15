@@ -160,6 +160,41 @@ struct PortfolioSummary: Sendable {
     static let empty = PortfolioSummary(marketValue: 0, dayProfit: 0, totalProfit: 0, positionCount: 0)
 }
 
+struct PositionHistoryRecord: Codable, Hashable, Identifiable, Sendable {
+    let id: UUID
+    let code: String
+    let name: String
+    let market: Market
+    let costPrice: Double
+    let quantity: Double
+    let closedPrice: Double?
+    let closedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        code: String,
+        name: String,
+        market: Market,
+        costPrice: Double,
+        quantity: Double,
+        closedPrice: Double?,
+        closedAt: Date = Date()
+    ) {
+        self.id = id
+        self.code = code.uppercased()
+        self.name = name
+        self.market = market
+        self.costPrice = costPrice
+        self.quantity = quantity
+        self.closedPrice = closedPrice
+        self.closedAt = closedAt
+    }
+
+    var displayName: String { name.nonEmpty ?? code }
+    var closedValue: Double? { closedPrice.map { $0 * quantity } }
+    var profit: Double? { closedPrice.map { ($0 - costPrice) * quantity } }
+}
+
 struct PersistedState: Codable, Sendable {
     var items: [WatchItem]
     var provider: QuoteProvider
@@ -168,6 +203,7 @@ struct PersistedState: Codable, Sendable {
     var statusBarDisplayMode: StatusBarDisplayMode
     var groups: [StockGroup]
     var groupMemberships: [String: Set<UUID>]
+    var positionHistory: [PositionHistoryRecord]
 
     init(
         items: [WatchItem],
@@ -176,7 +212,8 @@ struct PersistedState: Codable, Sendable {
         colorPreference: ColorSchemePreference,
         statusBarDisplayMode: StatusBarDisplayMode = .ticker,
         groups: [StockGroup] = [],
-        groupMemberships: [String: Set<UUID>] = [:]
+        groupMemberships: [String: Set<UUID>] = [:],
+        positionHistory: [PositionHistoryRecord] = []
     ) {
         self.items = items
         self.provider = provider
@@ -185,10 +222,11 @@ struct PersistedState: Codable, Sendable {
         self.statusBarDisplayMode = statusBarDisplayMode
         self.groups = groups
         self.groupMemberships = groupMemberships
+        self.positionHistory = positionHistory
     }
 
     private enum CodingKeys: String, CodingKey {
-        case items, provider, refreshInterval, colorPreference, statusBarDisplayMode, groups, groupMemberships
+        case items, provider, refreshInterval, colorPreference, statusBarDisplayMode, groups, groupMemberships, positionHistory
     }
 
     init(from decoder: Decoder) throws {
@@ -200,6 +238,7 @@ struct PersistedState: Codable, Sendable {
         statusBarDisplayMode = try container.decodeIfPresent(StatusBarDisplayMode.self, forKey: .statusBarDisplayMode) ?? .ticker
         groups = try container.decodeIfPresent([StockGroup].self, forKey: .groups) ?? []
         groupMemberships = try container.decodeIfPresent([String: Set<UUID>].self, forKey: .groupMemberships) ?? [:]
+        positionHistory = try container.decodeIfPresent([PositionHistoryRecord].self, forKey: .positionHistory) ?? []
     }
 
     static let initial = PersistedState(
@@ -214,7 +253,8 @@ struct PersistedState: Codable, Sendable {
         colorPreference: .redUp,
         statusBarDisplayMode: .ticker,
         groups: [],
-        groupMemberships: [:]
+        groupMemberships: [:],
+        positionHistory: []
     )
 }
 
