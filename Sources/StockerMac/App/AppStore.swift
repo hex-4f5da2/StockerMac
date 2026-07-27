@@ -157,7 +157,7 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func add(_ suggestions: [SearchSuggestion]) -> Set<String> {
+    func add(_ suggestions: [SearchSuggestion], toGroup groupID: UUID? = nil) -> Set<String> {
         var knownIDs = Set(items.map(\.id))
         let newItems = suggestions.compactMap { suggestion -> WatchItem? in
             guard knownIDs.insert(suggestion.id).inserted else { return nil }
@@ -166,9 +166,19 @@ final class AppStore: ObservableObject {
         guard !newItems.isEmpty else { return [] }
 
         items.append(contentsOf: newItems)
-        let markets = Set(newItems.map(\.market))
-        if markets.count == 1, let market = markets.first { selectMarket(market) }
-        else { selectAll() }
+        let validGroupID = groupID.flatMap { requestedID in
+            groups.contains(where: { $0.id == requestedID }) ? requestedID : nil
+        }
+        if let validGroupID {
+            for item in newItems {
+                groupMemberships[item.id, default: []].insert(validGroupID)
+            }
+            selectGroup(validGroupID)
+        } else {
+            let markets = Set(newItems.map(\.market))
+            if markets.count == 1, let market = markets.first { selectMarket(market) }
+            else { selectAll() }
+        }
         selectedID = newItems.last?.id
         persist()
         Task { await refresh() }

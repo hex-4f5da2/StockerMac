@@ -6,6 +6,7 @@ struct StockSearchView: View {
     @State private var keyword = ""
     @State private var results: [SearchSuggestion] = []
     @State private var addedIDs = Set<String>()
+    @State private var targetGroupID: UUID?
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
 
@@ -22,6 +23,23 @@ struct StockSearchView: View {
                     .keyboardShortcut("s", modifiers: .command)
             }
             .padding(20)
+
+            HStack {
+                Label("加入分组", systemImage: "folder")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("加入分组", selection: $targetGroupID) {
+                    Text("暂不分组").tag(Optional<UUID>.none)
+                    ForEach(store.groups) { group in
+                        Text(group.name).tag(Optional(group.id))
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: 240, alignment: .trailing)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 14)
 
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -48,7 +66,7 @@ struct StockSearchView: View {
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Button("全部添加") {
-                            addedIDs.formUnion(store.add(remainingResults))
+                            addedIDs.formUnion(store.add(remainingResults, toGroup: targetGroupID))
                         }
                         .controlSize(.small)
                         .disabled(remainingResults.isEmpty)
@@ -70,7 +88,7 @@ struct StockSearchView: View {
                             Spacer()
                             let isAdded = addedIDs.contains(result.id)
                             Button(isAdded ? "已添加" : "添加") {
-                                addedIDs.formUnion(store.add([result]))
+                                addedIDs.formUnion(store.add([result], toGroup: targetGroupID))
                             }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
@@ -83,6 +101,11 @@ struct StockSearchView: View {
             }
         }
         .frame(width: 560, height: 520)
+        .onAppear {
+            targetGroupID = store.selectedGroupID.flatMap { selectedID in
+                store.groups.contains(where: { $0.id == selectedID }) ? selectedID : nil
+            }
+        }
         .onChange(of: keyword) { _, _ in
             searchTask?.cancel()
             searchTask = Task {
