@@ -2,29 +2,105 @@ import SwiftUI
 
 struct DashboardView: View {
     @EnvironmentObject private var store: AppStore
+    @Binding var percentageSortMode: QuotePercentageSortMode
+    @State private var watchlistSearchText = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    MarketIndexCard(row: store.shanghaiIndexRow)
-                    SummaryCard(title: "持仓市值", value: Formatters.compact(store.summary.marketValue), subtitle: "跨市场未换汇", icon: "chart.pie.fill")
-                    SummaryCard(title: "今日盈亏", value: Formatters.signed(store.summary.dayProfit), subtitle: "按最新涨跌额", icon: "sun.max.fill", trend: store.summary.dayProfit)
-                    SummaryCard(title: "累计盈亏", value: Formatters.signed(store.summary.totalProfit), subtitle: "相对持仓成本", icon: "waveform.path.ecg", trend: store.summary.totalProfit)
-                    SummaryCard(title: "持仓标的", value: "\(store.summary.positionCount)", subtitle: "共 \(store.rows.count) 只自选", icon: "briefcase.fill")
+            if store.showingPositionsOnly {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        SummaryCard(title: "持仓市值", value: Formatters.compact(store.summary.marketValue), subtitle: "跨市场未换汇", icon: "chart.pie.fill")
+                        SummaryCard(title: "今日盈亏", value: Formatters.signed(store.summary.dayProfit), subtitle: "按最新涨跌额", icon: "sun.max.fill", trend: store.summary.dayProfit)
+                        SummaryCard(title: "累计盈亏", value: Formatters.signed(store.summary.totalProfit), subtitle: "相对持仓成本", icon: "waveform.path.ecg", trend: store.summary.totalProfit)
+                        SummaryCard(title: "持仓标的", value: "\(store.summary.positionCount)", subtitle: "当前持仓数量", icon: "briefcase.fill")
+                    }
+                    .padding(16)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    ForEach(store.marketIndexRows) { row in
+                        MarketIndexCard(row: row)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
                 .padding(16)
             }
 
             Divider()
 
+            if isShowingAllWatchlist {
+                watchlistSearchField
+                Divider()
+            }
+
             if store.rows.isEmpty {
-                ContentUnavailableView("还没有自选股", systemImage: "star", description: Text("点击工具栏的 + 搜索并添加股票"))
+                if store.showingPositionsOnly {
+                    ContentUnavailableView(
+                        "还没有持仓",
+                        systemImage: "briefcase",
+                        description: Text("选择一只自选股并填写成本价和持仓数量")
+                    )
+                } else {
+                    ContentUnavailableView("还没有自选股", systemImage: "star", description: Text("点击工具栏的 + 搜索并添加股票"))
+                }
+            } else if visibleRows.isEmpty {
+                ContentUnavailableView.search(text: normalizedWatchlistSearchText)
             } else {
-                QuoteTable()
+                QuoteTable(rows: visibleRows, percentageSortMode: $percentageSortMode)
             }
         }
         .navigationTitle(store.selectedCollectionTitle)
+        .onChange(of: isShowingAllWatchlist) { _, isShowing in
+            if !isShowing {
+                watchlistSearchText = ""
+            }
+        }
+    }
+
+    private var watchlistSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("搜索自选股名称或代码", text: $watchlistSearchText)
+                .textFieldStyle(.plain)
+            if !watchlistSearchText.isEmpty {
+                Button {
+                    watchlistSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("清除搜索")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var isShowingAllWatchlist: Bool {
+        store.selectedMarket == nil
+            && !store.showingPositionsOnly
+            && !store.showingUngroupedOnly
+            && store.selectedGroupID == nil
+    }
+
+    private var normalizedWatchlistSearchText: String {
+        watchlistSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var visibleRows: [QuoteRow] {
+        guard isShowingAllWatchlist, !normalizedWatchlistSearchText.isEmpty else {
+            return store.rows
+        }
+        return store.rows.filter { row in
+            row.displayName.localizedCaseInsensitiveContains(normalizedWatchlistSearchText)
+                || row.item.code.localizedCaseInsensitiveContains(normalizedWatchlistSearchText)
+        }
     }
 }
 
@@ -32,30 +108,40 @@ private struct MarketIndexCard: View {
     let row: QuoteRow
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "chart.line.uptrend.xyaxis")
-                .font(.title3)
-                .foregroundStyle(StockerTheme.accent)
-                .frame(width: 34, height: 34)
-                .background(StockerTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.caption)
+                    .foregroundStyle(StockerTheme.accent)
+                    .frame(width: 22, height: 22)
+                    .background(StockerTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                Text(row.item.name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("上证指数").font(.caption).foregroundStyle(.secondary)
-                if row.quote != nil {
-                    TrendText(value: row.percentage, text: Formatters.price(row.current))
-                        .font(.title3.bold())
-                    TrendText(
-                        value: row.percentage,
-                        text: "\(Formatters.signed(row.change))  \(Formatters.percent(row.percentage))"
-                    )
-                    .font(.caption2)
-                } else {
-                    ProgressView().controlSize(.small).frame(height: 39, alignment: .leading)
-                }
+            if row.quote != nil {
+                TrendText(value: row.percentage, text: Formatters.price(row.current))
+                    .font(.headline.bold())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                TrendText(
+                    value: row.percentage,
+                    text: "\(Formatters.signed(row.change))  \(Formatters.percent(row.percentage))"
+                )
+                .font(.caption2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(height: 35, alignment: .leading)
             }
         }
-        .frame(minWidth: 142, alignment: .leading)
-        .stockerCard()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .stockerCard(padding: 10)
     }
 }
 
@@ -87,64 +173,260 @@ private struct SummaryCard: View {
 
 private struct QuoteTable: View {
     @EnvironmentObject private var store: AppStore
-    @State private var sortOrder = [KeyPathComparator(\QuoteRow.displayName)]
+    let rows: [QuoteRow]
+    @Binding var percentageSortMode: QuotePercentageSortMode
 
     private var sortedRows: [QuoteRow] {
-        store.rows.sorted(using: sortOrder)
+        percentageSortMode.sorted(rows)
     }
 
     var body: some View {
-        Table(sortedRows, selection: $store.selectedID, sortOrder: $sortOrder) {
-            TableColumn("股票", value: \.displayName) { row in
+        GeometryReader { geometry in
+            let widths = QuoteTableColumnWidths(
+                total: max(620, geometry.size.width - 40),
+                includesPositions: store.showingPositionsOnly
+            )
+
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        ForEach(Array(sortedRows.enumerated()), id: \.element.id) { index, row in
+                            quoteTableRow(row, index: index, widths: widths)
+                        }
+                    } header: {
+                        quoteTableHeader(widths: widths)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private func quoteTableHeader(widths: QuoteTableColumnWidths) -> some View {
+        HStack(spacing: 0) {
+            Text("股票")
+                .frame(width: widths.stock, alignment: .leading)
+            Text("现价")
+                .frame(width: widths.price, alignment: .leading)
+            QuotePercentageSortMenu(
+                selection: $percentageSortMode,
+                title: "涨跌幅"
+            )
+            .frame(width: widths.change, alignment: .leading)
+            if !store.showingPositionsOnly {
+                Text("涨跌额")
+                    .frame(width: widths.changeAmount, alignment: .leading)
+            }
+            if store.showingPositionsOnly {
+                Text("持仓市值")
+                    .frame(width: widths.marketValue, alignment: .leading)
+                Text("盈亏")
+                    .frame(width: widths.profit, alignment: .leading)
+            } else {
+                Text("今开")
+                    .frame(width: widths.opening, alignment: .leading)
+                Text("振幅")
+                    .frame(width: widths.amplitude, alignment: .leading)
+                Text("最高 / 最低")
+                    .frame(width: widths.dayRange, alignment: .leading)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .frame(height: 32)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Divider().opacity(0.65)
+        }
+    }
+
+    private func quoteTableRow(
+        _ row: QuoteRow,
+        index: Int,
+        widths: QuoteTableColumnWidths
+    ) -> some View {
+        let isSelected = store.selectedID == row.id
+
+        return Button {
+            store.selectedID = row.id
+        } label: {
+            HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(row.displayName).fontWeight(.semibold).lineLimit(1)
                     Text("\(row.item.code) · \(row.item.market.shortTitle)")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 5)
-                .contextMenu {
-                    if !store.groups.isEmpty {
-                        Menu("加入分组") {
-                            ForEach(store.groups) { group in
-                                Button {
-                                    store.toggleMembership(itemID: row.id, groupID: group.id)
-                                } label: {
-                                    Label(group.name, systemImage: store.belongsToGroup(itemID: row.id, groupID: group.id) ? "checkmark" : "folder")
-                                }
-                            }
-                        }
-                        Divider()
+                .frame(width: widths.stock, alignment: .leading)
+
+                Group {
+                    if let quote = row.quote {
+                        TrendText(
+                            value: quote.percentage,
+                            text: Formatters.price(quote.current)
+                        )
+                        .fontWeight(.medium)
+                    } else {
+                        ProgressView().controlSize(.small)
                     }
-                    Button("删除自选", role: .destructive) { store.remove(row.id) }
+                }
+                .monospacedDigit()
+                .frame(width: widths.price, alignment: .leading)
+
+                Group {
+                    if row.quote != nil {
+                        TrendText(
+                            value: row.percentage,
+                            text: Formatters.percent(row.percentage)
+                        )
+                        .fontWeight(.semibold)
+                    } else {
+                        Text("—").foregroundStyle(.secondary)
+                    }
+                }
+                .monospacedDigit()
+                .frame(width: widths.change, alignment: .leading)
+
+                if !store.showingPositionsOnly {
+                    Group {
+                        if row.quote != nil {
+                            TrendText(
+                                value: row.change,
+                                text: Formatters.signed(row.change)
+                            )
+                        } else {
+                            Text("—").foregroundStyle(.secondary)
+                        }
+                    }
+                    .monospacedDigit()
+                    .frame(width: widths.changeAmount, alignment: .leading)
+                }
+
+                if store.showingPositionsOnly {
+                    Text(Formatters.compact(row.marketValue))
+                        .monospacedDigit()
+                        .frame(width: widths.marketValue, alignment: .leading)
+
+                    Group {
+                        TrendText(
+                            value: row.totalProfit,
+                            text: Formatters.signed(row.totalProfit)
+                        )
+                    }
+                    .monospacedDigit()
+                    .frame(width: widths.profit, alignment: .leading)
+                } else {
+                    Group {
+                        if let quote = row.quote {
+                            Text(Formatters.price(quote.opening))
+                        } else {
+                            Text("—").foregroundStyle(.secondary)
+                        }
+                    }
+                    .monospacedDigit()
+                    .frame(width: widths.opening, alignment: .leading)
+
+                    Group {
+                        if row.quote != nil {
+                            Text(Formatters.unsignedPercent(row.amplitude))
+                        } else {
+                            Text("—").foregroundStyle(.secondary)
+                        }
+                    }
+                    .monospacedDigit()
+                    .frame(width: widths.amplitude, alignment: .leading)
+
+                    Group {
+                        if let quote = row.quote {
+                            Text("\(Formatters.price(quote.high)) / \(Formatters.price(quote.low))")
+                        } else {
+                            Text("—").foregroundStyle(.secondary)
+                        }
+                    }
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(width: widths.dayRange, alignment: .leading)
                 }
             }
-            .width(min: 150, ideal: 190)
-
-            TableColumn("现价", value: \.current) { row in
-                if let quote = row.quote {
-                    TrendText(value: quote.percentage, text: Formatters.price(quote.current)).fontWeight(.medium)
-                } else { ProgressView().controlSize(.small) }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 48)
+            .background(
+                isSelected
+                    ? StockerTheme.accent.opacity(0.09)
+                    : (index.isMultiple(of: 2) ? .clear : Color.primary.opacity(0.018))
+            )
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Capsule()
+                        .fill(StockerTheme.accent)
+                        .frame(width: 3, height: 30)
+                        .padding(.leading, 3)
+                }
             }
-            .width(min: 75, ideal: 90)
-
-            TableColumn("涨跌幅", value: \.percentage) { row in
-                TrendText(value: row.percentage, text: Formatters.percent(row.percentage))
-                    .fontWeight(.semibold)
-            }
-            .width(min: 75, ideal: 85)
-
-            TableColumn("持仓市值", value: \.marketValue) { row in
-                Text(row.hasPosition ? Formatters.compact(row.marketValue) : "—")
-                    .monospacedDigit().foregroundStyle(row.hasPosition ? .primary : .tertiary)
-            }
-            .width(min: 80, ideal: 100)
-
-            TableColumn("盈亏", value: \.totalProfit) { row in
-                if row.hasPosition { TrendText(value: row.totalProfit, text: Formatters.signed(row.totalProfit)) }
-                else { Text("—").foregroundStyle(.tertiary) }
-            }
-            .width(min: 75, ideal: 95)
+            .contentShape(Rectangle())
         }
-        .alternatingRowBackgrounds(.enabled)
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            if !store.groups.isEmpty {
+                Menu("加入分组") {
+                    ForEach(store.groups) { group in
+                        Button {
+                            store.toggleMembership(itemID: row.id, groupID: group.id)
+                        } label: {
+                            Label(
+                                group.name,
+                                systemImage: store.belongsToGroup(
+                                    itemID: row.id,
+                                    groupID: group.id
+                                ) ? "checkmark" : "folder"
+                            )
+                        }
+                    }
+                }
+                Divider()
+            }
+            Button("删除自选", role: .destructive) {
+                store.remove(row.id)
+            }
+        }
+    }
+}
+
+private struct QuoteTableColumnWidths {
+    let stock: CGFloat
+    let price: CGFloat
+    let changeAmount: CGFloat
+    let change: CGFloat
+    let opening: CGFloat
+    let amplitude: CGFloat
+    let dayRange: CGFloat
+    let marketValue: CGFloat
+    let profit: CGFloat
+
+    init(total: CGFloat, includesPositions: Bool) {
+        if includesPositions {
+            stock = total * 0.34
+            price = total * 0.16
+            changeAmount = 0
+            change = total * 0.18
+            opening = 0
+            amplitude = 0
+            dayRange = 0
+            marketValue = total * 0.17
+            profit = total - stock - price - change - marketValue
+        } else {
+            stock = total * 0.24
+            price = total * 0.12
+            changeAmount = total * 0.12
+            change = total * 0.12
+            opening = total * 0.12
+            amplitude = total * 0.10
+            dayRange = total - stock - price - changeAmount - change - opening - amplitude
+            marketValue = 0
+            profit = 0
+        }
     }
 }

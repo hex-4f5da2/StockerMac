@@ -102,6 +102,26 @@ struct StockGroup: Codable, Hashable, Identifiable, Sendable {
     var sidebarID: String { "group:\(id.uuidString)" }
 }
 
+enum StockGroupSortOrder: Sendable {
+    case nameAscending
+    case nameDescending
+
+    func sorted(_ groups: [StockGroup]) -> [StockGroup] {
+        groups.sorted { lhs, rhs in
+            let comparison = lhs.name.localizedStandardCompare(rhs.name)
+            if comparison == .orderedSame {
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            switch self {
+            case .nameAscending:
+                return comparison == .orderedAscending
+            case .nameDescending:
+                return comparison == .orderedDescending
+            }
+        }
+    }
+}
+
 struct Quote: Hashable, Identifiable, Sendable {
     let code: String
     let name: String
@@ -127,6 +147,10 @@ struct QuoteRow: Hashable, Identifiable, Sendable {
     var current: Double { quote?.current ?? 0 }
     var percentage: Double { quote?.percentage ?? 0 }
     var change: Double { quote?.change ?? 0 }
+    var amplitude: Double {
+        guard let quote, quote.close != 0 else { return 0 }
+        return (quote.high - quote.low) / quote.close * 100
+    }
     var marketValue: Double { current * item.quantity }
     var dayProfit: Double { change * item.quantity }
     var totalProfit: Double { (current - item.costPrice) * item.quantity }
@@ -195,6 +219,65 @@ struct PositionHistoryRecord: Codable, Hashable, Identifiable, Sendable {
     var profit: Double? { closedPrice.map { ($0 - costPrice) * quantity } }
 }
 
+enum PriceAlertDirection: String, Codable, Sendable {
+    case risesTo
+    case fallsTo
+
+    var title: String {
+        switch self {
+        case .risesTo: "涨到"
+        case .fallsTo: "跌到"
+        }
+    }
+}
+
+struct StockPriceAlert: Codable, Hashable, Identifiable, Sendable {
+    let itemID: String
+    var targetPrice: Double
+    var direction: PriceAlertDirection
+    var createdAt: Date
+    var expiresAt: Date
+
+    var id: String { itemID }
+
+    func isTriggered(by currentPrice: Double) -> Bool {
+        switch direction {
+        case .risesTo: currentPrice >= targetPrice
+        case .fallsTo: currentPrice <= targetPrice
+        }
+    }
+
+    func isValid(at date: Date) -> Bool {
+        date < expiresAt
+    }
+}
+
+struct GroupAverageAlert: Codable, Hashable, Identifiable, Sendable {
+    let groupID: UUID
+    var referencePercentage: Double?
+    var updatedAt: Date
+
+    var id: UUID { groupID }
+
+    func movement(from currentPercentage: Double, threshold: Double = 1) -> Double? {
+        guard let referencePercentage else { return nil }
+        let movement = currentPercentage - referencePercentage
+        return abs(movement) >= threshold ? movement : nil
+    }
+}
+
+enum AlertRules {
+    static func priceDirection(currentPrice: Double, targetPrice: Double) -> PriceAlertDirection? {
+        guard currentPrice.isFinite, targetPrice.isFinite, currentPrice > 0, targetPrice > 0,
+              currentPrice != targetPrice else { return nil }
+        return targetPrice > currentPrice ? .risesTo : .fallsTo
+    }
+
+    static func endOfDay(containing date: Date, calendar: Calendar = .current) -> Date {
+        calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date)) ?? date
+    }
+}
+
 struct PersistedState: Codable, Sendable {
     var items: [WatchItem]
     var provider: QuoteProvider
@@ -204,6 +287,8 @@ struct PersistedState: Codable, Sendable {
     var groups: [StockGroup]
     var groupMemberships: [String: Set<UUID>]
     var positionHistory: [PositionHistoryRecord]
+    var stockPriceAlerts: [StockPriceAlert]
+    var groupAverageAlerts: [GroupAverageAlert]
 
     init(
         items: [WatchItem],
@@ -213,7 +298,9 @@ struct PersistedState: Codable, Sendable {
         statusBarDisplayMode: StatusBarDisplayMode = .ticker,
         groups: [StockGroup] = [],
         groupMemberships: [String: Set<UUID>] = [:],
-        positionHistory: [PositionHistoryRecord] = []
+        positionHistory: [PositionHistoryRecord] = [],
+        stockPriceAlerts: [StockPriceAlert] = [],
+        groupAverageAlerts: [GroupAverageAlert] = []
     ) {
         self.items = items
         self.provider = provider
@@ -223,10 +310,13 @@ struct PersistedState: Codable, Sendable {
         self.groups = groups
         self.groupMemberships = groupMemberships
         self.positionHistory = positionHistory
+        self.stockPriceAlerts = stockPriceAlerts
+        self.groupAverageAlerts = groupAverageAlerts
     }
 
     private enum CodingKeys: String, CodingKey {
         case items, provider, refreshInterval, colorPreference, statusBarDisplayMode, groups, groupMemberships, positionHistory
+        case stockPriceAlerts, groupAverageAlerts
     }
 
     init(from decoder: Decoder) throws {
@@ -239,6 +329,8 @@ struct PersistedState: Codable, Sendable {
         groups = try container.decodeIfPresent([StockGroup].self, forKey: .groups) ?? []
         groupMemberships = try container.decodeIfPresent([String: Set<UUID>].self, forKey: .groupMemberships) ?? [:]
         positionHistory = try container.decodeIfPresent([PositionHistoryRecord].self, forKey: .positionHistory) ?? []
+        stockPriceAlerts = try container.decodeIfPresent([StockPriceAlert].self, forKey: .stockPriceAlerts) ?? []
+        groupAverageAlerts = try container.decodeIfPresent([GroupAverageAlert].self, forKey: .groupAverageAlerts) ?? []
     }
 
     static let initial = PersistedState(
@@ -254,7 +346,9 @@ struct PersistedState: Codable, Sendable {
         statusBarDisplayMode: .ticker,
         groups: [],
         groupMemberships: [:],
-        positionHistory: []
+        positionHistory: [],
+        stockPriceAlerts: [],
+        groupAverageAlerts: []
     )
 }
 

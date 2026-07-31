@@ -8,13 +8,17 @@ struct ContentView: View {
     @State private var pendingCompactGroupID: UUID?
     @State private var isCompactWindowPinned = false
     @State private var isShowingPositionHistory = false
-    @State private var isConfirmingClearPositions = false
+    @State private var quotePercentageSortMode: QuotePercentageSortMode = .original
 
     var body: some View {
         Group {
             if let compactGroupID,
                store.groups.contains(where: { $0.id == compactGroupID }) {
-                CompactGroupView(groupID: compactGroupID, isAlwaysOnTop: $isCompactWindowPinned) {
+                CompactGroupView(
+                    groupID: compactGroupID,
+                    isAlwaysOnTop: $isCompactWindowPinned,
+                    percentageSortMode: $quotePercentageSortMode
+                ) {
                     self.compactGroupID = nil
                 }
             } else {
@@ -35,12 +39,6 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingPositionHistory) {
             PositionHistoryView()
         }
-        .alert("确认清空全部仓位？", isPresented: $isConfirmingClearPositions) {
-            Button("取消", role: .cancel) {}
-            Button("清仓", role: .destructive) { store.clearAllPositions() }
-        } message: {
-            Text("将结清当前 \(store.positionRows.count) 个持仓。自选股票和分组不会删除，本次持仓数据会保存到清仓历史。")
-        }
         .alert("无法更新行情", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
@@ -56,7 +54,7 @@ struct ContentView: View {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 250)
         } content: {
-            DashboardView()
+            DashboardView(percentageSortMode: $quotePercentageSortMode)
                 .navigationSplitViewColumnWidth(min: 600, ideal: 760)
         } detail: {
             InspectorView(row: store.selectedRow)
@@ -73,11 +71,6 @@ struct ContentView: View {
                     Label("清仓历史", systemImage: "clock.arrow.circlepath")
                 }
                 .help("查看清仓历史")
-                Button { isConfirmingClearPositions = true } label: {
-                    Label("清仓", systemImage: "rectangle.portrait.and.arrow.right")
-                }
-                .disabled(store.positionRows.isEmpty)
-                .help("清空全部仓位并保存历史")
                 Button {
                     pendingCompactGroupID = compactGroupID.flatMap { id in
                         store.groups.contains(where: { $0.id == id }) ? id : nil
@@ -129,7 +122,7 @@ private struct SidebarView: View {
                     .tag("positions")
             }
 
-            Section("分组") {
+            Section {
                 Button {
                     groupName = ""
                     isCreatingGroup = true
@@ -140,10 +133,33 @@ private struct SidebarView: View {
                 .foregroundStyle(StockerTheme.accent)
 
                 ForEach(store.groups) { group in
-                    Label(group.name, systemImage: "folder")
-                        .badge(store.itemCount(in: group.id))
-                        .tag(group.sidebarID)
+                    HStack {
+                        Label(group.name, systemImage: "folder")
+                        Spacer()
+                        if store.hasGroupAverageAlert(group.id) {
+                            Image(systemName: "bell.fill")
+                                .font(.caption)
+                                .foregroundStyle(StockerTheme.accent)
+                        }
+                    }
+                    .badge(store.itemCount(in: group.id))
+                    .tag(group.sidebarID)
                         .contextMenu {
+                            Button {
+                                store.toggleGroupAverageAlert(group.id)
+                            } label: {
+                                Label(
+                                    store.hasGroupAverageAlert(group.id) ? "关闭平均涨跌幅提醒" : "开启平均涨跌幅提醒",
+                                    systemImage: store.hasGroupAverageAlert(group.id) ? "bell.slash" : "bell"
+                                )
+                            }
+                            .disabled(store.itemCount(in: group.id) == 0)
+                            Divider()
+                            Button("上移") { store.moveGroup(group.id, by: -1) }
+                                .disabled(group.id == store.groups.first?.id)
+                            Button("下移") { store.moveGroup(group.id, by: 1) }
+                                .disabled(group.id == store.groups.last?.id)
+                            Divider()
                             Button("重命名") {
                                 groupName = group.name
                                 groupToRename = group
@@ -157,6 +173,25 @@ private struct SidebarView: View {
                 Label("未分组", systemImage: "tray")
                     .badge(store.ungroupedItemCount)
                     .tag("ungrouped")
+            } header: {
+                HStack {
+                    Text("分组")
+                    Spacer()
+                    Menu {
+                        Button("按名称升序") {
+                            store.sortGroups(by: .nameAscending)
+                        }
+                        Button("按名称降序") {
+                            store.sortGroups(by: .nameDescending)
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .disabled(store.groups.count < 2)
+                    .help("排序分组")
+                }
             }
         }
         .safeAreaInset(edge: .bottom) {

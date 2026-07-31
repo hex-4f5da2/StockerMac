@@ -23,10 +23,20 @@ enum GroupingChecks {
         precondition(migrated.groups.isEmpty)
         precondition(migrated.groupMemberships.isEmpty)
         precondition(migrated.positionHistory.isEmpty)
+        precondition(migrated.stockPriceAlerts.isEmpty)
+        precondition(migrated.groupAverageAlerts.isEmpty)
         precondition(migrated.statusBarDisplayMode == .ticker)
 
         let focus = StockGroup(name: "重点观察")
         let longTerm = StockGroup(name: "长期持有")
+        let alpha = StockGroup(name: "Alpha")
+        let beta = StockGroup(name: "Beta")
+        precondition(
+            StockGroupSortOrder.nameAscending.sorted([beta, alpha]).map(\.id) == [alpha.id, beta.id]
+        )
+        precondition(
+            StockGroupSortOrder.nameDescending.sorted([alpha, beta]).map(\.id) == [beta.id, alpha.id]
+        )
         let closedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let history = PositionHistoryRecord(
             code: "AAPL",

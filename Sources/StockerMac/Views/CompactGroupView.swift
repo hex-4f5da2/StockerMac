@@ -6,6 +6,7 @@ struct CompactGroupView: View {
 
     let groupID: UUID
     @Binding var isAlwaysOnTop: Bool
+    @Binding var percentageSortMode: QuotePercentageSortMode
     let onRestore: () -> Void
 
     private var group: StockGroup? {
@@ -13,7 +14,9 @@ struct CompactGroupView: View {
     }
 
     private var rows: [QuoteRow] {
-        store.allRows.filter { store.belongsToGroup(itemID: $0.id, groupID: groupID) }
+        percentageSortMode.sorted(
+            store.allRows.filter { store.belongsToGroup(itemID: $0.id, groupID: groupID) }
+        )
     }
 
     private let nameColumnWidth: CGFloat = 82
@@ -66,8 +69,8 @@ struct CompactGroupView: View {
                     HStack(spacing: columnSpacing) {
                         Text("股票")
                             .frame(width: nameColumnWidth, alignment: .leading)
-                        Text("涨跌幅")
-                            .frame(width: percentageColumnWidth, alignment: .leading)
+                        QuotePercentageSortMenu(selection: $percentageSortMode)
+                            .frame(width: percentageColumnWidth, alignment: .trailing)
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -88,11 +91,11 @@ struct CompactGroupView: View {
                                     if row.quote != nil {
                                         TrendText(value: row.percentage, text: Formatters.percent(row.percentage))
                                             .fontWeight(.semibold)
-                                            .frame(width: percentageColumnWidth, alignment: .leading)
+                                            .frame(width: percentageColumnWidth, alignment: .trailing)
                                     } else {
                                         Text("—")
                                             .foregroundStyle(.secondary)
-                                            .frame(width: percentageColumnWidth, alignment: .leading)
+                                            .frame(width: percentageColumnWidth, alignment: .trailing)
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)

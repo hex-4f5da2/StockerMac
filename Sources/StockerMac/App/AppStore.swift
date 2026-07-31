@@ -4,12 +4,20 @@ import SwiftUI
 
 @MainActor
 final class AppStore: ObservableObject {
-    private static let shanghaiIndexItem = WatchItem(code: "SH000001", name: "上证指数", market: .cn)
+    private static let marketIndexItems = [
+        WatchItem(code: "SH000001", name: "上证指数", market: .cn),
+        WatchItem(code: "SZ399001", name: "深证成指", market: .cn),
+        WatchItem(code: "SH000688", name: "科创50", market: .cn),
+        WatchItem(code: "SZ399006", name: "创业板指", market: .cn),
+        WatchItem(code: "BJ899050", name: "北证50", market: .cn)
+    ]
 
     @Published var items: [WatchItem]
     @Published var groups: [StockGroup]
     @Published private(set) var groupMemberships: [String: Set<UUID>]
     @Published private(set) var positionHistory: [PositionHistoryRecord]
+    @Published private(set) var stockPriceAlerts: [StockPriceAlert]
+    @Published private(set) var groupAverageAlerts: [GroupAverageAlert]
     @Published private(set) var quotes: [String: Quote] = [:]
     @Published var selectedMarket: Market?
     @Published var showingPositionsOnly = false
@@ -27,6 +35,7 @@ final class AppStore: ObservableObject {
     @Published var isSearchPresented = false
 
     private let service = QuoteService()
+    private let notificationService = NotificationService()
     private let stateStore = StateStore()
     private var refreshTask: Task<Void, Never>?
 
@@ -42,6 +51,13 @@ final class AppStore: ObservableObject {
             if !validMemberships.isEmpty { result[entry.key] = validMemberships }
         }
         positionHistory = state.positionHistory
+        let now = Date()
+        stockPriceAlerts = state.stockPriceAlerts.filter {
+            validItemIDs.contains($0.itemID) && $0.isValid(at: now)
+        }
+        groupAverageAlerts = state.groupAverageAlerts.filter {
+            validGroupIDs.contains($0.groupID)
+        }
         provider = state.provider
         refreshInterval = state.refreshInterval
         colorPreference = state.colorPreference
@@ -54,9 +70,10 @@ final class AppStore: ObservableObject {
         items.map { QuoteRow(item: $0, quote: quotes[$0.id]) }
     }
 
-    var shanghaiIndexRow: QuoteRow {
-        let item = Self.shanghaiIndexItem
-        return QuoteRow(item: item, quote: quotes[item.id])
+    var marketIndexRows: [QuoteRow] {
+        Self.marketIndexItems.map { item in
+            QuoteRow(item: item, quote: quotes[item.id])
+        }
     }
 
     var positionRows: [QuoteRow] {
@@ -113,12 +130,18 @@ final class AppStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            var quoteItems = items
-            if !quoteItems.contains(where: { $0.id == Self.shanghaiIndexItem.id }) {
-                quoteItems.append(Self.shanghaiIndexItem)
+            var quoteItemsByID = items.reduce(into: [String: WatchItem]()) { result, item in
+                result[item.id] = item
             }
+            for indexItem in Self.marketIndexItems {
+                if quoteItemsByID[indexItem.id] == nil {
+                    quoteItemsByID[indexItem.id] = indexItem
+                }
+            }
+            let quoteItems = Array(quoteItemsByID.values)
             let fetched = try await service.fetchQuotes(for: quoteItems, provider: provider)
             quotes.merge(Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0) })) { _, new in new }
+            await evaluateAlerts(at: Date())
             lastUpdated = Date()
             errorMessage = nil
         } catch {
@@ -173,6 +196,7 @@ final class AppStore: ObservableObject {
             for item in newItems {
                 groupMemberships[item.id, default: []].insert(validGroupID)
             }
+            resetGroupAlertReferences(for: [validGroupID])
             selectGroup(validGroupID)
         } else {
             let markets = Set(newItems.map(\.market))
@@ -192,12 +216,17 @@ final class AppStore: ObservableObject {
     func remove(_ ids: Set<String>) {
         let existingIDs = ids.intersection(items.map(\.id))
         guard !existingIDs.isEmpty else { return }
+        let affectedGroupIDs = existingIDs.reduce(into: Set<UUID>()) { result, itemID in
+            result.formUnion(groupIDs(for: itemID))
+        }
 
         items.removeAll { existingIDs.contains($0.id) }
         for id in existingIDs {
             quotes[id] = nil
             groupMemberships[id] = nil
         }
+        stockPriceAlerts.removeAll { existingIDs.contains($0.itemID) }
+        resetGroupAlertReferences(for: affectedGroupIDs)
         if let selectedID, existingIDs.contains(selectedID) { self.selectedID = nil }
         persist()
     }
@@ -227,6 +256,7 @@ final class AppStore: ObservableObject {
 
     func deleteGroup(_ id: UUID) {
         groups.removeAll { $0.id == id }
+        groupAverageAlerts.removeAll { $0.groupID == id }
         for itemID in Array(groupMemberships.keys) {
             groupMemberships[itemID]?.remove(id)
             if groupMemberships[itemID]?.isEmpty == true { groupMemberships[itemID] = nil }
@@ -237,6 +267,19 @@ final class AppStore: ObservableObject {
 
     func moveGroups(from offsets: IndexSet, to destination: Int) {
         groups.move(fromOffsets: offsets, toOffset: destination)
+        persist()
+    }
+
+    func moveGroup(_ id: UUID, by offset: Int) {
+        guard let sourceIndex = groups.firstIndex(where: { $0.id == id }) else { return }
+        let destinationIndex = sourceIndex + offset
+        guard groups.indices.contains(destinationIndex) else { return }
+        groups.swapAt(sourceIndex, destinationIndex)
+        persist()
+    }
+
+    func sortGroups(by order: StockGroupSortOrder) {
+        groups = order.sorted(groups)
         persist()
     }
 
@@ -255,6 +298,7 @@ final class AppStore: ObservableObject {
         if wasMember { memberships.remove(groupID) }
         else { memberships.insert(groupID) }
         groupMemberships[itemID] = memberships.isEmpty ? nil : memberships
+        resetGroupAlertReferences(for: [groupID])
         if selectedID == itemID && ((selectedGroupID == groupID && wasMember) || (showingUngroupedOnly && !memberships.isEmpty)) {
             selectedID = nil
         }
@@ -269,6 +313,53 @@ final class AppStore: ObservableObject {
 
     var ungroupedItemCount: Int {
         items.filter { groupIDs(for: $0.id).isEmpty }.count
+    }
+
+    func priceAlert(for itemID: String) -> StockPriceAlert? {
+        stockPriceAlerts.first { $0.itemID == itemID && $0.isValid(at: Date()) }
+    }
+
+    @discardableResult
+    func setPriceAlert(itemID: String, targetPrice: Double, now: Date = Date()) -> Bool {
+        guard let currentPrice = quotes[itemID]?.current,
+              let direction = AlertRules.priceDirection(currentPrice: currentPrice, targetPrice: targetPrice),
+              items.contains(where: { $0.id == itemID }) else { return false }
+
+        let alert = StockPriceAlert(
+            itemID: itemID,
+            targetPrice: targetPrice,
+            direction: direction,
+            createdAt: now,
+            expiresAt: AlertRules.endOfDay(containing: now)
+        )
+        stockPriceAlerts.removeAll { $0.itemID == itemID }
+        stockPriceAlerts.append(alert)
+        persist()
+        Task { await notificationService.requestAuthorization() }
+        return true
+    }
+
+    func clearPriceAlert(itemID: String) {
+        stockPriceAlerts.removeAll { $0.itemID == itemID }
+        persist()
+    }
+
+    func hasGroupAverageAlert(_ groupID: UUID) -> Bool {
+        groupAverageAlerts.contains { $0.groupID == groupID }
+    }
+
+    func toggleGroupAverageAlert(_ groupID: UUID, now: Date = Date()) {
+        if hasGroupAverageAlert(groupID) {
+            groupAverageAlerts.removeAll { $0.groupID == groupID }
+        } else if groups.contains(where: { $0.id == groupID }) {
+            groupAverageAlerts.append(GroupAverageAlert(
+                groupID: groupID,
+                referencePercentage: groupAveragePercentage(for: groupID),
+                updatedAt: now
+            ))
+            Task { await notificationService.requestAuthorization() }
+        }
+        persist()
     }
 
     func selectAll() {
@@ -314,35 +405,19 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func clearAllPositions(at closedAt: Date = Date()) -> [PositionHistoryRecord] {
-        let positionedIndices = items.indices.filter { items[$0].quantity > 0 }
-        guard !positionedIndices.isEmpty else { return [] }
+    func clearPosition(id: String, at closedAt: Date = Date()) -> PositionHistoryRecord? {
+        guard let index = items.firstIndex(where: { $0.id == id }),
+              items[index].quantity > 0 else { return nil }
 
-        let clearedIDs = Set(positionedIndices.map { items[$0].id })
-        let records = positionedIndices.map { index in
-            let item = items[index]
-            let quote = quotes[item.id]
-            return PositionHistoryRecord(
-                code: item.code,
-                name: QuoteRow(item: item, quote: quote).displayName,
-                market: item.market,
-                costPrice: item.costPrice,
-                quantity: item.quantity,
-                closedPrice: quote.map(\.current),
-                closedAt: closedAt
-            )
-        }
-
-        positionHistory.insert(contentsOf: records, at: 0)
-        for index in positionedIndices {
-            items[index].costPrice = 0
-            items[index].quantity = 0
-        }
-        if showingPositionsOnly, let selectedID, clearedIDs.contains(selectedID) {
-            self.selectedID = nil
+        let record = positionHistoryRecord(for: items[index], closedAt: closedAt)
+        positionHistory.insert(record, at: 0)
+        items[index].costPrice = 0
+        items[index].quantity = 0
+        if showingPositionsOnly, selectedID == id {
+            selectedID = nil
         }
         persist()
-        return records
+        return record
     }
 
     func persist() {
@@ -354,11 +429,90 @@ final class AppStore: ObservableObject {
             statusBarDisplayMode: statusBarDisplayMode,
             groups: groups,
             groupMemberships: groupMemberships,
-            positionHistory: positionHistory
+            positionHistory: positionHistory,
+            stockPriceAlerts: stockPriceAlerts,
+            groupAverageAlerts: groupAverageAlerts
         ))
+    }
+
+    private func groupAveragePercentage(for groupID: UUID) -> Double? {
+        let percentages = items.compactMap { item -> Double? in
+            guard groupIDs(for: item.id).contains(groupID) else { return nil }
+            return quotes[item.id]?.percentage
+        }
+        guard !percentages.isEmpty else { return nil }
+        return percentages.reduce(0, +) / Double(percentages.count)
+    }
+
+    private func resetGroupAlertReferences(for groupIDs: Set<UUID>) {
+        for index in groupAverageAlerts.indices where groupIDs.contains(groupAverageAlerts[index].groupID) {
+            groupAverageAlerts[index].referencePercentage = groupAveragePercentage(for: groupAverageAlerts[index].groupID)
+            groupAverageAlerts[index].updatedAt = Date()
+        }
+    }
+
+    private func evaluateAlerts(at now: Date) async {
+        var stateChanged = false
+        var firedPriceAlertIDs = Set<String>()
+
+        for alert in stockPriceAlerts {
+            guard alert.isValid(at: now) else {
+                firedPriceAlertIDs.insert(alert.itemID)
+                stateChanged = true
+                continue
+            }
+            guard let quote = quotes[alert.itemID], alert.isTriggered(by: quote.current) else { continue }
+            let name = items.first(where: { $0.id == alert.itemID })
+                .map { QuoteRow(item: $0, quote: quote).displayName } ?? quote.name
+            await notificationService.send(
+                identifier: "stock-price-\(alert.itemID)-\(alert.createdAt.timeIntervalSince1970)",
+                title: "\(name)已\(alert.direction.title) \(Formatters.price(alert.targetPrice))",
+                body: "当前价格 \(Formatters.price(quote.current))，本次当日价格提醒已完成。"
+            )
+            firedPriceAlertIDs.insert(alert.itemID)
+            stateChanged = true
+        }
+        stockPriceAlerts.removeAll { firedPriceAlertIDs.contains($0.itemID) }
+
+        for index in groupAverageAlerts.indices {
+            guard let average = groupAveragePercentage(for: groupAverageAlerts[index].groupID) else { continue }
+            guard let movement = groupAverageAlerts[index].movement(from: average) else {
+                if groupAverageAlerts[index].referencePercentage == nil {
+                    groupAverageAlerts[index].referencePercentage = average
+                    groupAverageAlerts[index].updatedAt = now
+                    stateChanged = true
+                }
+                continue
+            }
+            guard let group = groups.first(where: { $0.id == groupAverageAlerts[index].groupID }) else { continue }
+            let direction = movement > 0 ? "上升" : "下降"
+            await notificationService.send(
+                identifier: "group-average-\(group.id.uuidString)-\(now.timeIntervalSince1970)",
+                title: "\(group.name)平均涨跌幅已\(direction) 1 个百分点",
+                body: "当前平均涨跌幅 \(Formatters.percent(average))，较上次提醒基准\(direction) \(Formatters.percent(abs(movement)))。"
+            )
+            groupAverageAlerts[index].referencePercentage = average
+            groupAverageAlerts[index].updatedAt = now
+            stateChanged = true
+        }
+
+        if stateChanged { persist() }
     }
 
     private func normalizedGroupName(_ name: String) -> String {
         String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30))
+    }
+
+    private func positionHistoryRecord(for item: WatchItem, closedAt: Date) -> PositionHistoryRecord {
+        let quote = quotes[item.id]
+        return PositionHistoryRecord(
+            code: item.code,
+            name: QuoteRow(item: item, quote: quote).displayName,
+            market: item.market,
+            costPrice: item.costPrice,
+            quantity: item.quantity,
+            closedPrice: quote.map(\.current),
+            closedAt: closedAt
+        )
     }
 }

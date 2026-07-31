@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import Carbon.HIToolbox
 
 struct StockSearchView: View {
     @EnvironmentObject private var store: AppStore
@@ -9,6 +11,8 @@ struct StockSearchView: View {
     @State private var targetGroupID: UUID?
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
+    @State private var selectedResultID: String?
+    @FocusState private var isKeywordFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,7 +24,7 @@ struct StockSearchView: View {
                 }
                 Spacer()
                 Button("完成") { dismiss() }
-                    .keyboardShortcut("s", modifiers: .command)
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(20)
 
@@ -45,7 +49,13 @@ struct StockSearchView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("例如：600000, 00700, AAPL", text: $keyword)
                     .textFieldStyle(.plain)
-                    .onSubmit { performSearch() }
+                    .focused($isKeywordFocused)
+                    .onSubmit { submitSearchOrSelection() }
+                    .background {
+                        SearchArrowKeyHandler(isEnabled: isKeywordFocused) { offset in
+                            moveSelection(by: offset)
+                        }
+                    }
                 if isSearching { ProgressView().controlSize(.small) }
             }
             .padding(10)
@@ -66,7 +76,7 @@ struct StockSearchView: View {
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Button("全部添加") {
-                            addedIDs.formUnion(store.add(remainingResults, toGroup: targetGroupID))
+                            addAllResults()
                         }
                         .controlSize(.small)
                         .disabled(remainingResults.isEmpty)
@@ -75,28 +85,38 @@ struct StockSearchView: View {
 
                     Divider()
 
-                    List(results) { result in
-                        HStack(spacing: 12) {
-                            Text(result.market.shortTitle)
-                                .font(.caption.bold()).foregroundStyle(StockerTheme.accent)
-                                .frame(width: 34, height: 25)
-                                .background(StockerTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(result.name).fontWeight(.medium)
-                                Text(result.code).font(.caption).foregroundStyle(.secondary)
+                    ScrollViewReader { proxy in
+                        List(results, selection: $selectedResultID) { result in
+                            HStack(spacing: 12) {
+                                Text(result.market.shortTitle)
+                                    .font(.caption.bold()).foregroundStyle(StockerTheme.accent)
+                                    .frame(width: 34, height: 25)
+                                    .background(StockerTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(result.name).fontWeight(.medium)
+                                    Text(result.code).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                let isAdded = addedIDs.contains(result.id)
+                                Button(isAdded ? "已添加" : "添加") {
+                                    addResult(result)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .disabled(isAdded)
                             }
-                            Spacer()
-                            let isAdded = addedIDs.contains(result.id)
-                            Button(isAdded ? "已添加" : "添加") {
-                                addedIDs.formUnion(store.add([result], toGroup: targetGroupID))
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(isAdded)
+                            .padding(.vertical, 5)
+                            .tag(result.id)
+                            .id(result.id)
                         }
-                        .padding(.vertical, 5)
+                        .listStyle(.inset)
+                        .onChange(of: selectedResultID) { _, resultID in
+                            guard let resultID else { return }
+                            Task { @MainActor in
+                                proxy.scrollTo(resultID, anchor: .center)
+                            }
+                        }
                     }
-                    .listStyle(.inset)
                 }
             }
         }
@@ -105,9 +125,11 @@ struct StockSearchView: View {
             targetGroupID = store.selectedGroupID.flatMap { selectedID in
                 store.groups.contains(where: { $0.id == selectedID }) ? selectedID : nil
             }
+            focusKeywordUsingEnglishInput()
         }
         .onChange(of: keyword) { _, _ in
             searchTask?.cancel()
+            selectedResultID = nil
             searchTask = Task {
                 try? await Task.sleep(for: .milliseconds(350))
                 guard !Task.isCancelled else { return }
@@ -123,9 +145,60 @@ struct StockSearchView: View {
         searchTask = Task { await searchNow() }
     }
 
+    private func submitSearchOrSelection() {
+        if let selectedResult {
+            addResult(selectedResult)
+        } else {
+            performSearch()
+        }
+    }
+
+    private func moveSelection(by offset: Int) {
+        guard !results.isEmpty else { return }
+        guard let selectedResultID,
+              let currentIndex = results.firstIndex(where: { $0.id == selectedResultID }) else {
+            self.selectedResultID = results.first?.id
+            return
+        }
+        let nextIndex = min(max(currentIndex + offset, results.startIndex), results.index(before: results.endIndex))
+        self.selectedResultID = results[nextIndex].id
+    }
+
+    private func addResult(_ result: SearchSuggestion) {
+        let added = store.add([result], toGroup: targetGroupID)
+        guard !added.isEmpty else { return }
+        resetSearch()
+    }
+
+    private func addAllResults() {
+        let added = store.add(remainingResults, toGroup: targetGroupID)
+        guard !added.isEmpty else { return }
+        resetSearch()
+    }
+
+    private func resetSearch() {
+        searchTask?.cancel()
+        keyword = ""
+        results = []
+        addedIDs = []
+        selectedResultID = nil
+        isSearching = false
+        focusKeywordUsingEnglishInput()
+    }
+
+    private func focusKeywordUsingEnglishInput() {
+        if let source = TISCopyCurrentASCIICapableKeyboardInputSource()?.takeRetainedValue() {
+            TISSelectInputSource(source)
+        }
+        Task { @MainActor in
+            isKeywordFocused = true
+        }
+    }
+
     private func searchNow() async {
         guard !keyword.trimmingCharacters(in: .whitespaces).isEmpty else {
             results = []
+            selectedResultID = nil
             isSearching = false
             return
         }
@@ -135,10 +208,87 @@ struct StockSearchView: View {
         guard !Task.isCancelled, input == keyword else { return }
         results = found
         addedIDs = []
+        selectedResultID = found.first?.id
         isSearching = false
+    }
+
+    private var selectedResult: SearchSuggestion? {
+        guard let selectedResultID else { return nil }
+        return results.first { $0.id == selectedResultID }
     }
 
     private var remainingResults: [SearchSuggestion] {
         results.filter { !addedIDs.contains($0.id) }
+    }
+}
+
+private struct SearchArrowKeyHandler: NSViewRepresentable {
+    let isEnabled: Bool
+    let onMove: (Int) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isEnabled: isEnabled, onMove: onMove)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.hostView = view
+        context.coordinator.installMonitor()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.onMove = onMove
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.removeMonitor()
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var hostView: NSView?
+        var isEnabled: Bool
+        var onMove: (Int) -> Void
+        private var monitor: Any?
+
+        init(isEnabled: Bool, onMove: @escaping (Int) -> Void) {
+            self.isEnabled = isEnabled
+            self.onMove = onMove
+        }
+
+        func installMonitor() {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self,
+                      self.isEnabled,
+                      event.window === self.hostView?.window else {
+                    return event
+                }
+
+                let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+                guard event.modifierFlags.intersection(blockedModifiers).isEmpty else {
+                    return event
+                }
+
+                switch Int(event.keyCode) {
+                case kVK_UpArrow:
+                    self.onMove(-1)
+                    return nil
+                case kVK_DownArrow:
+                    self.onMove(1)
+                    return nil
+                default:
+                    return event
+                }
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
     }
 }

@@ -7,8 +7,8 @@ enum StockerTheme {
 }
 
 extension View {
-    func stockerCard() -> some View {
-        padding(16)
+    func stockerCard(padding: CGFloat = 16) -> some View {
+        self.padding(padding)
             .background(StockerTheme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -53,6 +53,10 @@ enum Formatters {
     }
 
     static func percent(_ value: Double) -> String { signed(value) + "%" }
+
+    static func unsignedPercent(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(2))) + "%"
+    }
 
     static func compact(_ value: Double) -> String {
         value.formatted(.number.notation(.compactName).precision(.fractionLength(2)))

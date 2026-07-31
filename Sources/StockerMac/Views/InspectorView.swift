@@ -3,8 +3,11 @@ import SwiftUI
 struct InspectorView: View {
     let row: QuoteRow?
     @EnvironmentObject private var store: AppStore
+    @Environment(\.openWindow) private var openWindow
     @State private var costText = ""
     @State private var quantityText = ""
+    @State private var priceAlertText = ""
+    @State private var isConfirmingClearPosition = false
 
     var body: some View {
         Group {
@@ -16,6 +19,7 @@ struct InspectorView: View {
                             sessionCard(quote)
                         }
                         positionCard(row)
+                        priceAlertCard(row)
                         groupCard(row)
                         if let quote = row.quote { updateInfo(quote) }
                     }
@@ -27,6 +31,14 @@ struct InspectorView: View {
                 ContentUnavailableView("选择一只股票", systemImage: "cursorarrow.click.2", description: Text("查看价格区间并编辑持仓"))
             }
         }
+        .alert("确认清仓 \(row?.displayName ?? "当前股票")？", isPresented: $isConfirmingClearPosition) {
+            Button("取消", role: .cancel) {}
+            Button("清仓", role: .destructive) {
+                if let row { store.clearPosition(id: row.id) }
+            }
+        } message: {
+            Text("只会结清这只股票的持仓，自选和分组不会删除，本次持仓数据会保存到清仓历史。")
+        }
     }
 
     private func header(_ row: QuoteRow) -> some View {
@@ -36,6 +48,13 @@ struct InspectorView: View {
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(StockerTheme.accent.opacity(0.12), in: Capsule())
                 Spacer()
+                Button {
+                    openWindow(id: "kline", value: row.id)
+                } label: {
+                    Image(systemName: "chart.xyaxis.line")
+                }
+                .buttonStyle(.plain)
+                .help("查看 K 线")
                 Button(role: .destructive) { store.remove(row.id) } label: { Image(systemName: "trash") }
                     .buttonStyle(.plain).help("删除自选")
             }
@@ -102,6 +121,11 @@ struct InspectorView: View {
                     TrendText(value: row.totalProfit, text: Formatters.signed(row.totalProfit)).font(.headline)
                 }
                 Spacer()
+                if row.hasPosition {
+                    Button("清仓", role: .destructive) {
+                        isConfirmingClearPosition = true
+                    }
+                }
                 Button("保存") {
                     store.updatePosition(
                         id: row.id,
@@ -144,6 +168,46 @@ struct InspectorView: View {
         .stockerCard()
     }
 
+    private func priceAlertCard(_ row: QuoteRow) -> some View {
+        let activeAlert = store.priceAlert(for: row.id)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("价格提醒").font(.headline)
+                Spacer()
+                Text("仅当日有效").font(.caption).foregroundStyle(.secondary)
+            }
+            if let activeAlert {
+                Label(
+                    "\(activeAlert.direction.title) \(Formatters.price(activeAlert.targetPrice)) 时通知",
+                    systemImage: "bell.fill"
+                )
+                .font(.callout)
+                .foregroundStyle(StockerTheme.accent)
+            }
+            HStack {
+                TextField("输入目标价格", text: $priceAlertText)
+                    .textFieldStyle(.roundedBorder)
+                if activeAlert != nil {
+                    Button("清除") {
+                        store.clearPriceAlert(itemID: row.id)
+                        priceAlertText = ""
+                    }
+                }
+                Button(activeAlert == nil ? "设置提醒" : "更新提醒") {
+                    if let target = Double(priceAlertText),
+                       store.setPriceAlert(itemID: row.id, targetPrice: target) {
+                        syncAlertInput(row)
+                    }
+                }
+                .disabled(!canSetPriceAlert(for: row))
+            }
+            Text("将根据当前价自动设置为“涨到”或“跌到”，触发一次后自动清除。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .stockerCard()
+    }
+
     private func updateInfo(_ quote: Quote) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "clock")
@@ -155,6 +219,16 @@ struct InspectorView: View {
     private func syncInputs(_ row: QuoteRow) {
         costText = row.item.costPrice == 0 ? "" : String(row.item.costPrice)
         quantityText = row.item.quantity == 0 ? "" : String(row.item.quantity)
+        syncAlertInput(row)
+    }
+
+    private func syncAlertInput(_ row: QuoteRow) {
+        priceAlertText = store.priceAlert(for: row.id).map { String($0.targetPrice) } ?? ""
+    }
+
+    private func canSetPriceAlert(for row: QuoteRow) -> Bool {
+        guard let target = Double(priceAlertText), let current = row.quote?.current else { return false }
+        return AlertRules.priceDirection(currentPrice: current, targetPrice: target) != nil
     }
 }
 
