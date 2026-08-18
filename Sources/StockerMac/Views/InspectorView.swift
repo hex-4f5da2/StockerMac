@@ -49,7 +49,7 @@ struct InspectorView: View {
                     .background(StockerTheme.accent.opacity(0.12), in: Capsule())
                 Spacer()
                 Button {
-                    openWindow(id: "kline", value: row.id)
+                    openWindow(id: "kline", value: KLineRoute(item: row.item))
                 } label: {
                     Image(systemName: "chart.xyaxis.line")
                 }
@@ -152,12 +152,20 @@ struct InspectorView: View {
                 Label("在左侧边栏点击 + 新建分组", systemImage: "folder.badge.plus")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                VStack(alignment: .leading, spacing: 8) {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 118), spacing: 8)],
+                    alignment: .leading,
+                    spacing: 8
+                ) {
                     ForEach(store.groups) { group in
-                        Toggle(group.name, isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { store.belongsToGroup(itemID: row.id, groupID: group.id) },
                             set: { _ in store.toggleMembership(itemID: row.id, groupID: group.id) }
-                        ))
+                        )) {
+                            Text(group.name)
+                                .lineLimit(1)
+                                .help(group.name)
+                        }
                         .toggleStyle(.checkbox)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }

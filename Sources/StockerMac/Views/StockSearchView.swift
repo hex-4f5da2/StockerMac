@@ -5,9 +5,9 @@ import Carbon.HIToolbox
 struct StockSearchView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
     @State private var keyword = ""
     @State private var results: [SearchSuggestion] = []
-    @State private var addedIDs = Set<String>()
     @State private var targetGroupID: UUID?
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
@@ -18,8 +18,8 @@ struct StockSearchView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("添加自选").font(.title2.bold())
-                    Text("支持代码、名称和拼音；多个关键词请用英文逗号分隔")
+                    Text("添加股票").font(.title2.bold())
+                    Text("支持代码、名称和拼音；多个关键词用英文逗号分隔，也可直接查看 K 线")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -75,6 +75,12 @@ struct StockSearchView: View {
                         Text("找到 \(results.count) 个结果")
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
+                        Button("查看 K 线") {
+                            openSelectedResultKLine()
+                        }
+                        .keyboardShortcut("e", modifiers: .command)
+                        .controlSize(.small)
+                        .disabled(selectedResult == nil)
                         Button("全部添加") {
                             addAllResults()
                         }
@@ -97,7 +103,7 @@ struct StockSearchView: View {
                                     Text(result.code).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                let isAdded = addedIDs.contains(result.id)
+                                let isAdded = existingItemIDs.contains(result.id)
                                 Button(isAdded ? "已添加" : "添加") {
                                     addResult(result)
                                 }
@@ -165,25 +171,16 @@ struct StockSearchView: View {
     }
 
     private func addResult(_ result: SearchSuggestion) {
-        let added = store.add([result], toGroup: targetGroupID)
-        guard !added.isEmpty else { return }
-        resetSearch()
+        _ = store.add([result], toGroup: targetGroupID)
     }
 
     private func addAllResults() {
-        let added = store.add(remainingResults, toGroup: targetGroupID)
-        guard !added.isEmpty else { return }
-        resetSearch()
+        _ = store.add(remainingResults, toGroup: targetGroupID)
     }
 
-    private func resetSearch() {
-        searchTask?.cancel()
-        keyword = ""
-        results = []
-        addedIDs = []
-        selectedResultID = nil
-        isSearching = false
-        focusKeywordUsingEnglishInput()
+    private func openSelectedResultKLine() {
+        guard let selectedResult else { return }
+        openWindow(id: "kline", value: KLineRoute(suggestion: selectedResult))
     }
 
     private func focusKeywordUsingEnglishInput() {
@@ -207,7 +204,6 @@ struct StockSearchView: View {
         let found = await store.search(input)
         guard !Task.isCancelled, input == keyword else { return }
         results = found
-        addedIDs = []
         selectedResultID = found.first?.id
         isSearching = false
     }
@@ -218,7 +214,11 @@ struct StockSearchView: View {
     }
 
     private var remainingResults: [SearchSuggestion] {
-        results.filter { !addedIDs.contains($0.id) }
+        results.filter { !existingItemIDs.contains($0.id) }
+    }
+
+    private var existingItemIDs: Set<String> {
+        Set(store.items.map(\.id))
     }
 }
 

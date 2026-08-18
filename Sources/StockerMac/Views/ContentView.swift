@@ -1,3 +1,4 @@
+import StockerCore
 import SwiftUI
 
 struct ContentView: View {
@@ -52,163 +53,162 @@ struct ContentView: View {
     private var fullSizeView: some View {
         NavigationSplitView {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 250)
+                .navigationSplitViewColumnWidth(min: 170, ideal: 195, max: 230)
         } content: {
-            DashboardView(percentageSortMode: $quotePercentageSortMode)
-                .navigationSplitViewColumnWidth(min: 600, ideal: 760)
+            if store.showingTelegraph {
+                TelegraphView()
+                    .navigationSplitViewColumnWidth(min: 520, ideal: 600)
+            } else {
+                DashboardView(percentageSortMode: $quotePercentageSortMode)
+                    .navigationSplitViewColumnWidth(min: 520, ideal: 600)
+            }
         } detail: {
-            InspectorView(row: store.selectedRow)
-                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 390)
+            if store.showingTelegraph {
+                TelegraphDetailView()
+                    .navigationSplitViewColumnWidth(min: 240, ideal: 270, max: 330)
+            } else {
+                InspectorView(row: store.selectedRow)
+                    .navigationSplitViewColumnWidth(min: 240, ideal: 270, max: 330)
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { store.isSearchPresented = true } label: { Label("添加股票", systemImage: "plus") }
-                Button { isShowingBatchDelete = true } label: { Label("批量删除", systemImage: "trash") }
-                    .disabled(store.rows.isEmpty)
-                    .help("批量删除当前列表中的股票")
-                Button { isShowingPositionHistory = true } label: {
-                    Label("清仓历史", systemImage: "clock.arrow.circlepath")
+                if !store.showingTelegraph {
+                    Button { store.isSearchPresented = true } label: { Label("添加股票", systemImage: "plus") }
+                    Button { isShowingBatchDelete = true } label: { Label("批量删除", systemImage: "trash") }
+                        .disabled(store.rows.isEmpty)
+                        .help("批量删除当前列表中的股票")
+                    Button { isShowingPositionHistory = true } label: {
+                        Label("清仓历史", systemImage: "clock.arrow.circlepath")
+                    }
+                    .help("查看清仓历史")
+                    Button {
+                        pendingCompactGroupID = compactGroupID.flatMap { id in
+                            store.groups.contains(where: { $0.id == id }) ? id : nil
+                        } ?? store.groups.first?.id
+                        isShowingCompactGroupPicker = true
+                    } label: {
+                        Label("小窗模式", systemImage: "rectangle.compress.vertical")
+                    }
+                    .help("选择一个分组并进入小窗模式")
+                    Button { store.toggleAutoRefresh() } label: {
+                        Label(store.isAutoRefreshEnabled ? "暂停自动刷新" : "继续自动刷新",
+                              systemImage: store.isAutoRefreshEnabled ? "pause.fill" : "play.fill")
+                    }
+                    Button { Task { await store.refresh() } } label: {
+                        if store.isRefreshing { ProgressView().controlSize(.small) }
+                        else { Label("刷新", systemImage: "arrow.clockwise") }
+                    }
+                    .disabled(store.isRefreshing)
                 }
-                .help("查看清仓历史")
-                Button {
-                    pendingCompactGroupID = compactGroupID.flatMap { id in
-                        store.groups.contains(where: { $0.id == id }) ? id : nil
-                    } ?? store.groups.first?.id
-                    isShowingCompactGroupPicker = true
-                } label: {
-                    Label("小窗模式", systemImage: "rectangle.compress.vertical")
-                }
-                .help("选择一个分组并进入小窗模式")
-                Button { store.toggleAutoRefresh() } label: {
-                    Label(store.isAutoRefreshEnabled ? "暂停自动刷新" : "继续自动刷新",
-                          systemImage: store.isAutoRefreshEnabled ? "pause.fill" : "play.fill")
-                }
-                Button { Task { await store.refresh() } } label: {
-                    if store.isRefreshing { ProgressView().controlSize(.small) }
-                    else { Label("刷新", systemImage: "arrow.clockwise") }
-                }
-                .disabled(store.isRefreshing)
             }
         }
-        .frame(minWidth: 1060, minHeight: 680)
+        .frame(minWidth: 900, minHeight: 600)
         .background(WindowModeResizer(mode: .fullSize))
     }
 }
 
 private struct SidebarView: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var telegraphVM: TelegraphViewModel
     @State private var isCreatingGroup = false
     @State private var groupName = ""
     @State private var groupToRename: StockGroup?
     @State private var groupToDelete: StockGroup?
 
     var body: some View {
-        List(selection: sidebarSelection) {
-            Section("行情") {
-                Label("全部自选", systemImage: "star.fill")
-                    .badge(store.items.count)
-                    .tag("all")
-                ForEach(Market.allCases) { market in
-                    Label(market.title, systemImage: icon(for: market))
-                        .badge(store.items.filter { $0.market == market }.count)
-                        .tag(market.rawValue)
-                }
-            }
-
-            Section("资产") {
-                Label("我的持仓", systemImage: "briefcase.fill")
-                    .badge(store.items.filter { $0.quantity > 0 }.count)
-                    .tag("positions")
-            }
-
-            Section {
-                Button {
-                    groupName = ""
-                    isCreatingGroup = true
-                } label: {
-                    Label("新建分组", systemImage: "folder.badge.plus")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(StockerTheme.accent)
-
-                ForEach(store.groups) { group in
-                    HStack {
-                        Label(group.name, systemImage: "folder")
-                        Spacer()
-                        if store.hasGroupAverageAlert(group.id) {
-                            Image(systemName: "bell.fill")
-                                .font(.caption)
-                                .foregroundStyle(StockerTheme.accent)
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    sectionHeader("行情")
+                    navRow(
+                        "全部自选",
+                        icon: "star.fill",
+                        badge: store.items.count,
+                        isSelected: isAllSelected
+                    ) {
+                        store.selectAll()
+                    }
+                    ForEach(Market.allCases) { market in
+                        navRow(
+                            market.title,
+                            icon: icon(for: market),
+                            badge: store.items.filter { $0.market == market }.count,
+                            isSelected: store.selectedMarket == market
+                        ) {
+                            store.selectMarket(market)
                         }
                     }
-                    .badge(store.itemCount(in: group.id))
-                    .tag(group.sidebarID)
-                        .contextMenu {
-                            Button {
-                                store.toggleGroupAverageAlert(group.id)
-                            } label: {
-                                Label(
-                                    store.hasGroupAverageAlert(group.id) ? "关闭平均涨跌幅提醒" : "开启平均涨跌幅提醒",
-                                    systemImage: store.hasGroupAverageAlert(group.id) ? "bell.slash" : "bell"
-                                )
-                            }
-                            .disabled(store.itemCount(in: group.id) == 0)
-                            Divider()
-                            Button("上移") { store.moveGroup(group.id, by: -1) }
-                                .disabled(group.id == store.groups.first?.id)
-                            Button("下移") { store.moveGroup(group.id, by: 1) }
-                                .disabled(group.id == store.groups.last?.id)
-                            Divider()
-                            Button("重命名") {
-                                groupName = group.name
-                                groupToRename = group
-                            }
-                            Divider()
-                            Button("删除分组", role: .destructive) { groupToDelete = group }
-                        }
-                }
-                .onMove(perform: store.moveGroups)
 
-                Label("未分组", systemImage: "tray")
-                    .badge(store.ungroupedItemCount)
-                    .tag("ungrouped")
-            } header: {
-                HStack {
-                    Text("分组")
-                    Spacer()
-                    Menu {
-                        Button("按名称升序") {
-                            store.sortGroups(by: .nameAscending)
-                        }
-                        Button("按名称降序") {
-                            store.sortGroups(by: .nameDescending)
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
+                    sectionHeader("资产")
+                    navRow(
+                        "我的持仓",
+                        icon: "briefcase.fill",
+                        badge: store.items.filter { $0.quantity > 0 }.count,
+                        isSelected: store.showingPositionsOnly
+                    ) {
+                        store.selectPositions()
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .disabled(store.groups.count < 2)
-                    .help("排序分组")
+
+                    if AppStore.telegraphEnabled {
+                        sectionHeader("消息")
+                        navRow(
+                            "电报",
+                            icon: "newspaper.fill",
+                            badge: telegraphVM.unreadCount,
+                            isSelected: store.showingTelegraph
+                        ) {
+                            store.selectTelegraph()
+                        }
+                    }
+
+                    groupSectionHeader
+
+                    if store.groups.isEmpty {
+                        emptyGroupHint
+                    } else {
+                        LazyVGrid(columns: groupColumns, spacing: 6) {
+                            ForEach(store.groups) { group in
+                                groupTile(group)
+                                    .contextMenu {
+                                        Button {
+                                            store.toggleGroupAverageAlert(group.id)
+                                        } label: {
+                                            Label(
+                                                store.hasGroupAverageAlert(group.id) ? "关闭平均涨跌幅提醒" : "开启平均涨跌幅提醒",
+                                                systemImage: store.hasGroupAverageAlert(group.id) ? "bell.slash" : "bell"
+                                            )
+                                        }
+                                        .disabled(store.itemCount(in: group.id) == 0)
+                                        Divider()
+                                        Button("上移") { store.moveGroup(group.id, by: -1) }
+                                            .disabled(group.id == store.groups.first?.id)
+                                        Button("下移") { store.moveGroup(group.id, by: 1) }
+                                            .disabled(group.id == store.groups.last?.id)
+                                        Divider()
+                                        Button("重命名") {
+                                            groupName = group.name
+                                            groupToRename = group
+                                        }
+                                        Divider()
+                                        Button("删除分组", role: .destructive) { groupToDelete = group }
+                                    }
+                            }
+                        }
+                    }
+
+                    ungroupedRow
                 }
+                .padding(.horizontal, 10)
+                .padding(.top, 28)
+                .padding(.bottom, 12)
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(store.isAutoRefreshEnabled ? Color.green : Color.orange)
-                    .frame(width: 7, height: 7)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(store.isAutoRefreshEnabled ? "实时更新中" : "自动刷新已暂停")
-                        .font(.caption).fontWeight(.medium)
-                    Text(store.lastUpdated?.formatted(date: .omitted, time: .standard) ?? "等待首次更新")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(12)
-            .background(.bar)
+            .scrollIndicators(.hidden)
+
+            Divider()
+
+            refreshStatus
         }
         .navigationTitle("Stocker")
         .alert("新建分组", isPresented: $isCreatingGroup) {
@@ -245,24 +245,236 @@ private struct SidebarView: View {
         }
     }
 
-    private var sidebarSelection: Binding<String> {
-        Binding(
-            get: {
-                if let groupID = store.selectedGroupID { return "group:\(groupID.uuidString)" }
-                if store.showingUngroupedOnly { return "ungrouped" }
-                if store.showingPositionsOnly { return "positions" }
-                return store.selectedMarket?.rawValue ?? "all"
-            },
-            set: { selection in
-                if selection == "all" { store.selectAll() }
-                else if selection == "positions" { store.selectPositions() }
-                else if selection == "ungrouped" { store.selectUngrouped() }
-                else if let market = Market(rawValue: selection) { store.selectMarket(market) }
-                else if selection.hasPrefix("group:"), let id = UUID(uuidString: String(selection.dropFirst(6))) {
-                    store.selectGroup(id)
-                }
+    private var groupSectionHeader: some View {
+        HStack(spacing: 4) {
+            Text("自选分组")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text("\(store.groups.count)")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+
+            Spacer()
+
+            Button {
+                groupName = ""
+                isCreatingGroup = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 18, height: 18)
             }
-        )
+            .buttonStyle(.plain)
+            .foregroundStyle(StockerTheme.accent)
+            .help("新建分组")
+
+            Menu {
+                Button("按名称升序") {
+                    store.sortGroups(by: .nameAscending)
+                }
+                Button("按名称降序") {
+                    store.sortGroups(by: .nameDescending)
+                }
+            } label: {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .frame(width: 18, height: 18)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .disabled(store.groups.count < 2)
+            .help("排序分组")
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 4)
+        .padding(.horizontal, 8)
+    }
+
+    private var groupColumns: [GridItem] {
+        [
+            GridItem(.flexible(), spacing: 6),
+            GridItem(.flexible(), spacing: 6),
+        ]
+    }
+
+    private func groupTile(_ group: StockGroup) -> some View {
+        let isSelected = store.selectedGroupID == group.id
+        return Button {
+            store.selectGroup(group.id)
+        } label: {
+            HStack(spacing: 3) {
+                Text(group.name)
+                    .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.88)
+                    .allowsTightening(true)
+                Spacer(minLength: 2)
+                if store.hasGroupAverageAlert(group.id) {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 7.5))
+                        .foregroundStyle(StockerTheme.accent)
+                }
+                Text("\(store.itemCount(in: group.id))")
+                    .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(isSelected ? StockerTheme.accent : .secondary)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 7)
+            .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34)
+            .background(
+                isSelected ? StockerTheme.accent.opacity(0.16) : Color.primary.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        isSelected ? StockerTheme.accent.opacity(0.35) : Color.primary.opacity(0.065),
+                        lineWidth: 0.7
+                    )
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue("\(store.itemCount(in: group.id)) 只股票")
+    }
+
+    private var emptyGroupHint: some View {
+        Button {
+            groupName = ""
+            isCreatingGroup = true
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "folder.badge.plus")
+                    .foregroundStyle(StockerTheme.accent)
+                Text("创建第一个分组")
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.system(size: 11))
+            .padding(.horizontal, 9)
+            .frame(height: 34)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var ungroupedRow: some View {
+        let isSelected = store.showingUngroupedOnly
+        return Button {
+            store.selectUngrouped()
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "tray")
+                    .font(.system(size: 11))
+                    .foregroundStyle(isSelected ? StockerTheme.accent : .secondary)
+                    .frame(width: 16)
+                Text("未分组")
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                Spacer()
+                countBadge(store.ungroupedItemCount, isSelected: isSelected)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 34)
+            .background(
+                isSelected ? StockerTheme.accent.opacity(0.16) : Color.primary.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        isSelected ? StockerTheme.accent.opacity(0.35) : Color.primary.opacity(0.065),
+                        lineWidth: 0.7
+                    )
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue("\(store.ungroupedItemCount) 只股票")
+        .padding(.top, 6)
+    }
+
+    private func navRow(
+        _ title: String,
+        icon: String,
+        badge: Int,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .foregroundStyle(isSelected ? StockerTheme.accent : .secondary)
+                    .frame(width: 16)
+                Text(title)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                countBadge(badge, isSelected: isSelected)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            .background(
+                isSelected ? StockerTheme.accent.opacity(0.15) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue("\(badge)")
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.top, 12)
+            .padding(.bottom, 3)
+    }
+
+    private func countBadge(_ count: Int, isSelected: Bool) -> some View {
+        Text("\(count)")
+            .font(.system(size: 10, weight: .medium, design: .rounded))
+            .foregroundStyle(isSelected ? StockerTheme.accent : .secondary)
+            .monospacedDigit()
+            .padding(.horizontal, 5)
+            .frame(minWidth: 22, minHeight: 16)
+            .background(
+                isSelected ? StockerTheme.accent.opacity(0.12) : Color.primary.opacity(0.055),
+                in: Capsule()
+            )
+    }
+
+    private var refreshStatus: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(store.isAutoRefreshEnabled ? Color.green : Color.orange)
+                .frame(width: 7, height: 7)
+                .shadow(color: (store.isAutoRefreshEnabled ? Color.green : Color.orange).opacity(0.35), radius: 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(store.isAutoRefreshEnabled ? "实时更新中" : "自动刷新已暂停")
+                    .font(.caption.weight(.medium))
+                Text(store.lastUpdated?.formatted(date: .omitted, time: .standard) ?? "等待首次更新")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private var isAllSelected: Bool {
+        store.selectedMarket == nil
+            && !store.showingPositionsOnly
+            && !store.showingUngroupedOnly
+            && !store.showingTelegraph
+            && store.selectedGroupID == nil
     }
 
     private func icon(for market: Market) -> String {

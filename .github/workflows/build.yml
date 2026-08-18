@@ -18,6 +18,15 @@ jobs:
       - name: Build
         run: swift build
 
+      - name: Telegraph checks (swiftc)
+        run: |
+          swiftc -parse-as-library Sources/StockerCore/Models/*.swift \
+            Sources/StockerCore/Networking/*.swift \
+            Sources/StockerCore/Persistence/*.swift \
+            Sources/StockerCore/App/*.swift \
+            Tests/TelegraphChecks.swift -o .build/telegraph-checks
+          .build/telegraph-checks
+
       - name: Package app
         run: ./Scripts/build-app.sh
 

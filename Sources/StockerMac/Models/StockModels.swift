@@ -164,6 +164,28 @@ struct SearchSuggestion: Hashable, Identifiable, Sendable {
     var id: String { "\(market.rawValue):\(code.uppercased())" }
 }
 
+struct KLineRoute: Codable, Hashable, Sendable {
+    let code: String
+    let name: String
+    let market: Market
+
+    init(item: WatchItem) {
+        code = item.code
+        name = item.name
+        market = item.market
+    }
+
+    init(suggestion: SearchSuggestion) {
+        code = suggestion.code
+        name = suggestion.name
+        market = suggestion.market
+    }
+
+    var item: WatchItem {
+        WatchItem(code: code, name: name, market: market)
+    }
+}
+
 enum SearchInputParser {
     static func keywords(from input: String) -> [String] {
         var seen = Set<String>()

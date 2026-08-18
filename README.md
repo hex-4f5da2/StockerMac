@@ -14,6 +14,7 @@
 - 独立行情图窗口：A 股支持分时、五日、1/5/15/30/60/120 分钟及日/周/月/年 K；港股、美股支持日/周/月/年 K，并展示成交量、均线、MACD 和可用行情概览
 - 小窗模式：进入前选择分组，仅展示股票名称和涨跌幅，支持窗口置顶
 - 新浪 / 腾讯双数据源切换
+- 电报快讯模块：财联社 / 东方财富 / 金十 A股三数据源一键切换，10/30/60 秒轮询，按“全部 / 仅重要 / 重要+自选股 / 关”发送系统通知（默认仅重要），本地分类筛选、搜索、日期分组、未读标记、关联股票跳转，数据按天持久化保留 7 天
 - 股票代码、名称、拼音搜索
 - “全部自选”支持按股票名称或代码即时筛选
 - 使用英文逗号一次查询并批量添加多只股票
@@ -69,6 +70,19 @@ swiftc Sources/StockerMac/Models/StockModels.swift \
 ```
 
 仓库还附带了 `Tests/LiveAPIChecks.swift`，用于对两个真实行情源做端到端检查。
+
+电报模块检查（签名、双数据源解析、存储、水位线、通知事务）：
+
+```bash
+swiftc -parse-as-library Sources/StockerCore/Models/*.swift \
+  Sources/StockerCore/Networking/*.swift \
+  Sources/StockerCore/Persistence/*.swift \
+  Sources/StockerCore/App/*.swift \
+  Tests/TelegraphChecks.swift -o .build/telegraph-checks
+.build/telegraph-checks
+```
+
+> 电报数据来自财联社与东方财富公开接口。财联社接口签名（`md5(sha1(参数扁平串))`）由网页前端逆向而来，若官方调整签名或启用风控（当前状态：仅返回最新约 20 条、历史翻页受限），电报模块会显示错误横幅并保留历史数据，可手动切换另一数据源（东方财富不受影响）。公开接口可能调整或限制访问，仅供信息展示，不构成投资建议。
 
 分组持久化和旧数据迁移检查：
 

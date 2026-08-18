@@ -188,13 +188,11 @@ private struct QuoteTable: View {
             )
 
             ScrollView {
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        ForEach(Array(sortedRows.enumerated()), id: \.element.id) { index, row in
-                            quoteTableRow(row, index: index, widths: widths)
-                        }
-                    } header: {
-                        quoteTableHeader(widths: widths)
+                // 用 VStack（非 LazyVStack）：窗口隐藏/恢复后 LazyVStack 懒加载会失效导致列表空白
+                VStack(spacing: 0) {
+                    quoteTableHeader(widths: widths)
+                    ForEach(Array(sortedRows.enumerated()), id: \.element.id) { index, row in
+                        quoteTableRow(row, index: index, widths: widths)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -213,22 +211,11 @@ private struct QuoteTable: View {
                 title: "涨跌幅"
             )
             .frame(width: widths.change, alignment: .leading)
-            if !store.showingPositionsOnly {
-                Text("涨跌额")
-                    .frame(width: widths.changeAmount, alignment: .leading)
-            }
             if store.showingPositionsOnly {
                 Text("持仓市值")
                     .frame(width: widths.marketValue, alignment: .leading)
                 Text("盈亏")
                     .frame(width: widths.profit, alignment: .leading)
-            } else {
-                Text("今开")
-                    .frame(width: widths.opening, alignment: .leading)
-                Text("振幅")
-                    .frame(width: widths.amplitude, alignment: .leading)
-                Text("最高 / 最低")
-                    .frame(width: widths.dayRange, alignment: .leading)
             }
         }
         .font(.caption)
@@ -288,21 +275,6 @@ private struct QuoteTable: View {
                 .monospacedDigit()
                 .frame(width: widths.change, alignment: .leading)
 
-                if !store.showingPositionsOnly {
-                    Group {
-                        if row.quote != nil {
-                            TrendText(
-                                value: row.change,
-                                text: Formatters.signed(row.change)
-                            )
-                        } else {
-                            Text("—").foregroundStyle(.secondary)
-                        }
-                    }
-                    .monospacedDigit()
-                    .frame(width: widths.changeAmount, alignment: .leading)
-                }
-
                 if store.showingPositionsOnly {
                     Text(Formatters.compact(row.marketValue))
                         .monospacedDigit()
@@ -316,38 +288,6 @@ private struct QuoteTable: View {
                     }
                     .monospacedDigit()
                     .frame(width: widths.profit, alignment: .leading)
-                } else {
-                    Group {
-                        if let quote = row.quote {
-                            Text(Formatters.price(quote.opening))
-                        } else {
-                            Text("—").foregroundStyle(.secondary)
-                        }
-                    }
-                    .monospacedDigit()
-                    .frame(width: widths.opening, alignment: .leading)
-
-                    Group {
-                        if row.quote != nil {
-                            Text(Formatters.unsignedPercent(row.amplitude))
-                        } else {
-                            Text("—").foregroundStyle(.secondary)
-                        }
-                    }
-                    .monospacedDigit()
-                    .frame(width: widths.amplitude, alignment: .leading)
-
-                    Group {
-                        if let quote = row.quote {
-                            Text("\(Formatters.price(quote.high)) / \(Formatters.price(quote.low))")
-                        } else {
-                            Text("—").foregroundStyle(.secondary)
-                        }
-                    }
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                    .frame(width: widths.dayRange, alignment: .leading)
                 }
             }
             .padding(.horizontal, 12)
@@ -398,11 +338,7 @@ private struct QuoteTable: View {
 private struct QuoteTableColumnWidths {
     let stock: CGFloat
     let price: CGFloat
-    let changeAmount: CGFloat
     let change: CGFloat
-    let opening: CGFloat
-    let amplitude: CGFloat
-    let dayRange: CGFloat
     let marketValue: CGFloat
     let profit: CGFloat
 
@@ -410,21 +346,13 @@ private struct QuoteTableColumnWidths {
         if includesPositions {
             stock = total * 0.34
             price = total * 0.16
-            changeAmount = 0
             change = total * 0.18
-            opening = 0
-            amplitude = 0
-            dayRange = 0
             marketValue = total * 0.17
             profit = total - stock - price - change - marketValue
         } else {
-            stock = total * 0.24
-            price = total * 0.12
-            changeAmount = total * 0.12
-            change = total * 0.12
-            opening = total * 0.12
-            amplitude = total * 0.10
-            dayRange = total - stock - price - changeAmount - change - opening - amplitude
+            stock = total * 0.42
+            price = total * 0.24
+            change = total - stock - price
             marketValue = 0
             profit = 0
         }

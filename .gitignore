@@ -7,3 +7,6 @@ dist/
 DerivedData/
 .idea/
 .vscode/
+TradingAgents/
+logs/
+opencode.jsonc

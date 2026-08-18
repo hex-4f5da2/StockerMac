@@ -1,9 +1,13 @@
 import Combine
 import Foundation
+import StockerCore
 import SwiftUI
 
 @MainActor
 final class AppStore: ObservableObject {
+    /// 电报（财联社/金十快讯）功能开关。关闭后不再轮询拉取，侧边栏与设置项同步隐藏，可缓解卡顿。
+    static let telegraphEnabled = false
+
     private static let marketIndexItems = [
         WatchItem(code: "SH000001", name: "上证指数", market: .cn),
         WatchItem(code: "SZ399001", name: "深证成指", market: .cn),
@@ -22,6 +26,7 @@ final class AppStore: ObservableObject {
     @Published var selectedMarket: Market?
     @Published var showingPositionsOnly = false
     @Published var showingUngroupedOnly = false
+    @Published var showingTelegraph = false
     @Published var selectedGroupID: UUID?
     @Published var selectedID: String?
     @Published var provider: QuoteProvider
@@ -155,8 +160,7 @@ final class AppStore: ObservableObject {
         let keywords = SearchInputParser.keywords(from: input)
         guard !keywords.isEmpty else { return [] }
 
-        let existingIDs = Set(items.map(\.id))
-        var seenIDs = existingIDs
+        var seenIDs = Set<String>()
         var results: [SearchSuggestion] = []
         var lastError: Error?
 
@@ -366,8 +370,14 @@ final class AppStore: ObservableObject {
         selectedMarket = nil
         showingPositionsOnly = false
         showingUngroupedOnly = false
+        showingTelegraph = false
         selectedGroupID = nil
         selectedID = nil
+    }
+
+    func selectTelegraph() {
+        selectAll()
+        showingTelegraph = true
     }
 
     func selectMarket(_ market: Market) {
@@ -391,6 +401,7 @@ final class AppStore: ObservableObject {
     }
 
     var selectedCollectionTitle: String {
+        if showingTelegraph { return "电报" }
         if showingPositionsOnly { return "我的持仓" }
         if showingUngroupedOnly { return "未分组" }
         if let selectedGroupID, let group = groups.first(where: { $0.id == selectedGroupID }) { return group.name }
@@ -464,7 +475,7 @@ final class AppStore: ObservableObject {
             guard let quote = quotes[alert.itemID], alert.isTriggered(by: quote.current) else { continue }
             let name = items.first(where: { $0.id == alert.itemID })
                 .map { QuoteRow(item: $0, quote: quote).displayName } ?? quote.name
-            await notificationService.send(
+            try? await notificationService.send(
                 identifier: "stock-price-\(alert.itemID)-\(alert.createdAt.timeIntervalSince1970)",
                 title: "\(name)已\(alert.direction.title) \(Formatters.price(alert.targetPrice))",
                 body: "当前价格 \(Formatters.price(quote.current))，本次当日价格提醒已完成。"
@@ -486,7 +497,7 @@ final class AppStore: ObservableObject {
             }
             guard let group = groups.first(where: { $0.id == groupAverageAlerts[index].groupID }) else { continue }
             let direction = movement > 0 ? "上升" : "下降"
-            await notificationService.send(
+            try? await notificationService.send(
                 identifier: "group-average-\(group.id.uuidString)-\(now.timeIntervalSince1970)",
                 title: "\(group.name)平均涨跌幅已\(direction) 1 个百分点",
                 body: "当前平均涨跌幅 \(Formatters.percent(average))，较上次提醒基准\(direction) \(Formatters.percent(abs(movement)))。"
@@ -514,5 +525,21 @@ final class AppStore: ObservableObject {
             closedPrice: quote.map(\.current),
             closedAt: closedAt
         )
+    }
+}
+
+// MARK: - 电报模块自选股快照
+
+extension AppStore: WatchlistProviding {
+    var watchlistCodes: [SecurityID] {
+        items.compactMap { item in
+            let market: SecurityMarket
+            switch item.market {
+            case .cn: market = .cn
+            case .hk: market = .hk
+            case .us: market = .us
+            }
+            return SecurityID(market: market, code: item.code.uppercased())
+        }
     }
 }
