@@ -26,6 +26,15 @@ enum GroupingChecks {
         precondition(migrated.stockPriceAlerts.isEmpty)
         precondition(migrated.groupAverageAlerts.isEmpty)
         precondition(migrated.statusBarDisplayMode == .ticker)
+        precondition(migrated.dataMode == .localStockDB)
+        precondition(migrated.stockDBHost == "127.0.0.1")
+        precondition(migrated.stockDBPort == 7899)
+
+        let lanRoute = MarketDataRoute(
+            mode: .localStockDB, provider: .sina,
+            stockDBHost: "192.168.1.20", stockDBPort: 17899
+        )
+        precondition(lanRoute.localURL?.absoluteString == "http://192.168.1.20:17899/")
 
         let focus = StockGroup(name: "重点观察")
         let longTerm = StockGroup(name: "长期持有")

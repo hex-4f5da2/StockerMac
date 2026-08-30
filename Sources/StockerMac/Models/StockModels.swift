@@ -45,6 +45,42 @@ enum QuoteProvider: String, Codable, CaseIterable, Identifiable, Sendable {
     var title: String { self == .sina ? "新浪财经" : "腾讯财经" }
 }
 
+enum MarketDataMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case localStockDB
+    case network
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .localStockDB: "StockDB"
+        case .network: "网络行情"
+        }
+    }
+}
+
+struct MarketDataRoute: Hashable, Sendable {
+    let mode: MarketDataMode
+    let provider: QuoteProvider
+    let stockDBHost: String
+    let stockDBPort: Int
+
+    static let localDefault = MarketDataRoute(
+        mode: .localStockDB, provider: .sina,
+        stockDBHost: "127.0.0.1", stockDBPort: 7899
+    )
+
+    var localURL: URL? {
+        let host = stockDBHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, (1...65_535).contains(stockDBPort) else { return nil }
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = host
+        components.port = stockDBPort
+        components.path = "/"
+        return components.url
+    }
+}
+
 enum ColorSchemePreference: String, Codable, CaseIterable, Identifiable, Sendable {
     case redUp
     case greenUp
@@ -301,7 +337,10 @@ enum AlertRules {
 
 struct PersistedState: Codable, Sendable {
     var items: [WatchItem]
+    var dataMode: MarketDataMode
     var provider: QuoteProvider
+    var stockDBHost: String
+    var stockDBPort: Int
     var refreshInterval: Double
     var colorPreference: ColorSchemePreference
     var statusBarDisplayMode: StatusBarDisplayMode
@@ -316,6 +355,9 @@ struct PersistedState: Codable, Sendable {
         provider: QuoteProvider,
         refreshInterval: Double,
         colorPreference: ColorSchemePreference,
+        dataMode: MarketDataMode = .localStockDB,
+        stockDBHost: String = "127.0.0.1",
+        stockDBPort: Int = 7899,
         statusBarDisplayMode: StatusBarDisplayMode = .ticker,
         groups: [StockGroup] = [],
         groupMemberships: [String: Set<UUID>] = [:],
@@ -324,7 +366,10 @@ struct PersistedState: Codable, Sendable {
         groupAverageAlerts: [GroupAverageAlert] = []
     ) {
         self.items = items
+        self.dataMode = dataMode
         self.provider = provider
+        self.stockDBHost = stockDBHost
+        self.stockDBPort = stockDBPort
         self.refreshInterval = refreshInterval
         self.colorPreference = colorPreference
         self.statusBarDisplayMode = statusBarDisplayMode
@@ -336,14 +381,17 @@ struct PersistedState: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case items, provider, refreshInterval, colorPreference, statusBarDisplayMode, groups, groupMemberships, positionHistory
+        case items, dataMode, provider, stockDBHost, stockDBPort, refreshInterval, colorPreference, statusBarDisplayMode, groups, groupMemberships, positionHistory
         case stockPriceAlerts, groupAverageAlerts
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         items = try container.decode([WatchItem].self, forKey: .items)
+        dataMode = try container.decodeIfPresent(MarketDataMode.self, forKey: .dataMode) ?? .localStockDB
         provider = try container.decode(QuoteProvider.self, forKey: .provider)
+        stockDBHost = try container.decodeIfPresent(String.self, forKey: .stockDBHost) ?? "127.0.0.1"
+        stockDBPort = try container.decodeIfPresent(Int.self, forKey: .stockDBPort) ?? 7899
         refreshInterval = try container.decode(Double.self, forKey: .refreshInterval)
         colorPreference = try container.decode(ColorSchemePreference.self, forKey: .colorPreference)
         statusBarDisplayMode = try container.decodeIfPresent(StatusBarDisplayMode.self, forKey: .statusBarDisplayMode) ?? .ticker

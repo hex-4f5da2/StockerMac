@@ -47,6 +47,16 @@ enum KLineChecks {
             "A 股概览：今开 \(overview.opening)，昨收 \(overview.previousClose)，"
                 + "成交额 \(overview.amount ?? 0)"
         )
+
+        let networkRoute = MarketDataRoute(
+            mode: .network, provider: .tencent,
+            stockDBHost: "127.0.0.1", stockDBPort: 7899
+        )
+        let networkService = KLineService(route: networkRoute)
+        let networkMinutes = try await networkService.fetchCandles(for: marketItems[0], period: .timeShare)
+        let networkDays = try await networkService.fetchCandles(for: marketItems[0], period: .day)
+        try validate(networkMinutes, label: "网络分时")
+        try validate(networkDays, label: "网络日K")
     }
 
     private static func validate(_ candles: [KLineCandle], label: String) throws {

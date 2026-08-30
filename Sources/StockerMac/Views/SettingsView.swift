@@ -11,11 +11,53 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("通用") {
-                LabeledContent("行情数据源") {
-                    Text("本地 StockDB")
+            Section("行情数据") {
+                Picker("数据模式", selection: $store.dataMode) {
+                    ForEach(MarketDataMode.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: store.dataMode) { _, _ in store.applyMarketDataRoute() }
+
+                if store.dataMode == .localStockDB {
+                    HStack {
+                        TextField("StockDB IP 或主机名", text: $store.stockDBHost)
+                            .textFieldStyle(.roundedBorder)
+                        Text(":").foregroundStyle(.secondary)
+                        TextField("端口", value: $store.stockDBPort, format: .number.grouping(.never))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 90)
+                        Button("应用") { store.applyMarketDataRoute() }
+                    }
+                    LabeledContent("当前路由") {
+                        Text("http://\(store.stockDBHost):\(store.stockDBPort)")
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    Text("默认连接本机；也可以填写局域网 StockDB 服务的 IP 和端口。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("网络行情源", selection: $store.provider) {
+                        ForEach(QuoteProvider.allCases) { Text($0.title).tag($0) }
+                    }
+                    .onChange(of: store.provider) { _, _ in store.applyMarketDataRoute() }
+                    Text("现价与搜索使用所选来源；分时和 K 线使用腾讯行情接口。")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                if let errorMessage = store.errorMessage {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if let lastUpdated = store.lastUpdated {
+                    Label("连接正常 · \(lastUpdated.formatted(date: .omitted, time: .standard))", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+            }
+
+            Section("通用") {
 
                 Picker("涨跌颜色", selection: $store.colorPreference) {
                     ForEach(ColorSchemePreference.allCases) { Text($0.title).tag($0) }

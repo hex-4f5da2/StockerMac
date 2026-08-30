@@ -3,8 +3,9 @@ import Foundation
 
 actor KLineService {
     private let session: URLSession
-    private let local = LocalStockDBClient.shared
+    private var localClients: [String: LocalStockDBClient] = [:]
     private var resolvedUSCodes: [String: String] = [:]
+    private let routeOverride: MarketDataRoute?
 
     static func makeDefaultSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
@@ -15,8 +16,12 @@ actor KLineService {
         return URLSession(configuration: configuration)
     }
 
-    init(session: URLSession = KLineService.makeDefaultSession()) {
+    init(
+        session: URLSession = KLineService.makeDefaultSession(),
+        route: MarketDataRoute? = nil
+    ) {
         self.session = session
+        routeOverride = route
     }
 
     func fetchCandles(for item: WatchItem, period: KLinePeriod) async throws -> [KLineCandle] {
@@ -24,8 +29,9 @@ actor KLineService {
             throw KLineServiceError.unsupportedMarket
         }
 
-        if item.market == .cn {
-            return try await local.fetchCandles(for: item, period: period)
+        let route = currentRoute()
+        if route.mode == .localStockDB {
+            return try await localClient(for: route).fetchCandles(for: item, period: period)
         }
 
         let apiCode = try await apiCode(for: item)
@@ -67,8 +73,9 @@ actor KLineService {
     }
 
     func fetchOverview(for item: WatchItem) async throws -> MarketOverview {
-        if item.market == .cn {
-            return try await local.fetchOverview(for: item)
+        let route = currentRoute()
+        if route.mode == .localStockDB {
+            return try await localClient(for: route).fetchOverview(for: item)
         }
         let code: String
         switch item.market {
@@ -133,6 +140,24 @@ actor KLineService {
             resolvedUSCodes[item.id] = resolved
             return resolved
         }
+    }
+
+    private func currentRoute() -> MarketDataRoute {
+        if let routeOverride { return routeOverride }
+        let state = StateStore().load()
+        return MarketDataRoute(
+            mode: state.dataMode, provider: state.provider,
+            stockDBHost: state.stockDBHost, stockDBPort: state.stockDBPort
+        )
+    }
+
+    private func localClient(for route: MarketDataRoute) throws -> LocalStockDBClient {
+        guard let url = route.localURL else { throw KLineServiceError.invalidURL }
+        let key = url.absoluteString
+        if let client = localClients[key] { return client }
+        let client = LocalStockDBClient(baseURL: url)
+        localClients[key] = client
+        return client
     }
 
     private func resolveUSCode(_ code: String) async throws -> String {

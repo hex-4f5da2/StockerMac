@@ -30,7 +30,10 @@ final class AppStore: ObservableObject {
     @Published var showingTelegraph = false
     @Published var selectedGroupID: UUID?
     @Published var selectedID: String?
+    @Published var dataMode: MarketDataMode
     @Published var provider: QuoteProvider
+    @Published var stockDBHost: String
+    @Published var stockDBPort: Int
     @Published var refreshInterval: Double
     @Published var colorPreference: ColorSchemePreference
     @Published var statusBarDisplayMode: StatusBarDisplayMode
@@ -69,7 +72,10 @@ final class AppStore: ObservableObject {
         groupAverageAlerts = state.groupAverageAlerts.filter {
             validGroupIDs.contains($0.groupID)
         }
+        dataMode = state.dataMode
         provider = state.provider
+        stockDBHost = state.stockDBHost
+        stockDBPort = state.stockDBPort
         refreshInterval = state.refreshInterval
         colorPreference = state.colorPreference
         statusBarDisplayMode = state.statusBarDisplayMode
@@ -137,6 +143,21 @@ final class AppStore: ObservableObject {
         persist()
     }
 
+    var marketDataRoute: MarketDataRoute {
+        MarketDataRoute(
+            mode: dataMode, provider: provider,
+            stockDBHost: stockDBHost, stockDBPort: stockDBPort
+        )
+    }
+
+    func applyMarketDataRoute() {
+        stockDBHost = stockDBHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        stockDBPort = min(65_535, max(1, stockDBPort))
+        quotes.removeAll()
+        persistImmediately()
+        restartRefreshLoop()
+    }
+
     func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
@@ -151,7 +172,7 @@ final class AppStore: ObservableObject {
                 }
             }
             let quoteItems = Array(quoteItemsByID.values)
-            let fetched = try await service.fetchQuotes(for: quoteItems, provider: provider)
+            let fetched = try await service.fetchQuotes(for: quoteItems, route: marketDataRoute)
             quotes.merge(Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0) })) { _, new in new }
             await evaluateAlerts(at: Date())
             if lastGroupOrderingAt == nil || Date().timeIntervalSince(lastGroupOrderingAt!) >= 60 {
@@ -177,7 +198,7 @@ final class AppStore: ObservableObject {
 
         for keyword in keywords {
             do {
-                let matches = try await service.search(keyword, provider: provider)
+                let matches = try await service.search(keyword, route: marketDataRoute)
                 for suggestion in matches where seenIDs.insert(suggestion.id).inserted {
                     results.append(suggestion)
                 }
@@ -526,6 +547,9 @@ final class AppStore: ObservableObject {
             provider: provider,
             refreshInterval: refreshInterval,
             colorPreference: colorPreference,
+            dataMode: dataMode,
+            stockDBHost: stockDBHost,
+            stockDBPort: stockDBPort,
             statusBarDisplayMode: statusBarDisplayMode,
             groups: groups,
             groupMemberships: groupMemberships,
@@ -547,6 +571,10 @@ final class AppStore: ObservableObject {
 
     /// 同步落盘，仅用于测试的确定性断言。
     func flushPersistForTesting() {
+        persistImmediately()
+    }
+
+    private func persistImmediately() {
         persistDebounce?.cancel()
         persistDebounce = nil
         let snapshot = PersistedState(
@@ -554,6 +582,9 @@ final class AppStore: ObservableObject {
             provider: provider,
             refreshInterval: refreshInterval,
             colorPreference: colorPreference,
+            dataMode: dataMode,
+            stockDBHost: stockDBHost,
+            stockDBPort: stockDBPort,
             statusBarDisplayMode: statusBarDisplayMode,
             groups: groups,
             groupMemberships: groupMemberships,

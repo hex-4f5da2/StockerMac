@@ -3,7 +3,7 @@ import Foundation
 
 actor QuoteService {
     private let session: URLSession
-    private let local = LocalStockDBClient.shared
+    private var localClients: [String: LocalStockDBClient] = [:]
 
     static func makeDefaultSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
@@ -19,21 +19,75 @@ actor QuoteService {
     }
 
     func fetchQuotes(for items: [WatchItem], provider: QuoteProvider) async throws -> [Quote] {
-        _ = provider // 保留字段仅用于兼容旧设置；Mac 行情统一由本地 StockDB 提供。
-        return try await local.fetchQuotes(for: items)
+        try await fetchQuotes(for: items, route: MarketDataRoute(
+            mode: .localStockDB, provider: provider,
+            stockDBHost: "127.0.0.1", stockDBPort: 7899
+        ))
     }
 
     func search(_ keyword: String, provider: QuoteProvider) async throws -> [SearchSuggestion] {
-        _ = provider
-        return try await local.search(keyword)
+        try await search(keyword, route: MarketDataRoute(
+            mode: .localStockDB, provider: provider,
+            stockDBHost: "127.0.0.1", stockDBPort: 7899
+        ))
+    }
+
+    func fetchQuotes(for items: [WatchItem], route: MarketDataRoute) async throws -> [Quote] {
+        if route.mode == .localStockDB {
+            return try await localClient(for: route).fetchQuotes(for: items)
+        }
+        let groups = Dictionary(grouping: items.filter { $0.market == .cn }, by: \.market)
+        return try await withThrowingTaskGroup(of: [Quote].self) { group in
+            for (market, marketItems) in groups where !marketItems.isEmpty {
+                group.addTask {
+                    try await self.fetchQuotes(
+                        codes: marketItems.map(\.code), market: market, provider: route.provider
+                    )
+                }
+            }
+            var result: [Quote] = []
+            for try await quotes in group { result.append(contentsOf: quotes) }
+            return result
+        }
+    }
+
+    func search(_ keyword: String, route: MarketDataRoute) async throws -> [SearchSuggestion] {
+        if route.mode == .localStockDB {
+            return try await localClient(for: route).search(keyword)
+        }
+        guard !keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
+        let urlString = route.provider == .sina
+            ? "https://suggest3.sinajs.cn/suggest/key=\(encoded)"
+            : "https://smartbox.gtimg.cn/s3/?v=2&t=all&c=1&q=\(encoded)"
+        guard let url = URL(string: urlString) else { throw QuoteServiceError.invalidURL }
+        let response = try await request(url, provider: route.provider)
+        let suggestions = route.provider == .sina
+            ? parseSinaSuggestions(response) : parseTencentSuggestions(response)
+        return suggestions.filter { $0.market == .cn }
+    }
+
+    private func localClient(for route: MarketDataRoute) throws -> LocalStockDBClient {
+        guard let url = route.localURL else { throw QuoteServiceError.invalidLocalEndpoint }
+        let key = url.absoluteString
+        if let client = localClients[key] { return client }
+        let client = LocalStockDBClient(baseURL: url)
+        localClients[key] = client
+        return client
     }
 
     private func fetchQuotes(codes: [String], market: Market, provider: QuoteProvider) async throws -> [Quote] {
-        let encodedCodes = codes.map { apiCode($0, market: market, provider: provider) }.joined(separator: ",")
-        let host = provider == .sina ? "https://hq.sinajs.cn/list=" : "https://qt.gtimg.cn/q="
-        guard let url = URL(string: host + encodedCodes) else { throw QuoteServiceError.invalidURL }
-        let response = try await request(url, provider: provider)
-        return QuoteParser.parse(response, provider: provider, market: market)
+        var quotes: [Quote] = []
+        for offset in stride(from: 0, to: codes.count, by: 500) {
+            let chunk = Array(codes[offset..<min(offset + 500, codes.count)])
+            let encodedCodes = chunk.map { apiCode($0, market: market, provider: provider) }
+                .joined(separator: ",")
+            let host = provider == .sina ? "https://hq.sinajs.cn/list=" : "https://qt.gtimg.cn/q="
+            guard let url = URL(string: host + encodedCodes) else { throw QuoteServiceError.invalidURL }
+            let response = try await request(url, provider: provider)
+            quotes.append(contentsOf: QuoteParser.parse(response, provider: provider, market: market))
+        }
+        return quotes
     }
 
     private func request(_ url: URL, provider: QuoteProvider) async throws -> String {
@@ -112,12 +166,14 @@ enum QuoteServiceError: LocalizedError {
     case invalidURL
     case badResponse
     case decodingFailed
+    case invalidLocalEndpoint
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: "行情地址无效"
         case .badResponse: "行情服务暂时不可用"
         case .decodingFailed: "行情数据解析失败"
+        case .invalidLocalEndpoint: "StockDB IP 或端口无效"
         }
     }
 }

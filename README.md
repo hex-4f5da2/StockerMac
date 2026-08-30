@@ -15,6 +15,7 @@
 - 独立行情图窗口：支持分时、五日、1/5/15/30/60/120 分钟及日/周/月/年 K，并展示成交量、均线、MACD 和行情概览
 - 小窗模式：进入前选择分组，仅展示股票名称和涨跌幅，支持窗口置顶
 - 本地 StockDB 行情源；盘中数据超过 30 秒未更新会明确提示采集器异常
+- 行情数据路由：可在“本地/局域网 StockDB”和“新浪/腾讯网络行情”之间切换；StockDB 支持自定义 IP 与端口
 - 电报快讯模块：财联社 / 东方财富 / 金十 A股三数据源一键切换，10/30/60 秒轮询，按“全部 / 仅重要 / 重要+自选股 / 关”发送系统通知（默认仅重要），本地分类筛选、搜索、日期分组、未读标记、关联股票跳转，数据按天持久化保留 7 天
 - 股票代码、名称、拼音搜索
 - “全部自选”支持按股票名称或代码即时筛选
@@ -41,6 +42,15 @@ cd /Users/z/work/stockdb/realtime
 ```bash
 swift run StockerMac
 ```
+
+### 数据路由
+
+设置页默认使用 `http://127.0.0.1:7899`。如果 StockDB 运行在局域网另一台机器，可填写
+该机器的 IP 和端口。服务端必须把 `stockdb.conf` 的 `server.ip` 从 `127.0.0.1` 改为
+局域网 IP 或 `0.0.0.0`，并允许对应端口通过防火墙。不要把无认证的 StockDB 端口暴露到公网。
+
+选择“网络行情”后，现价与搜索直接使用新浪或腾讯；分时及 K 线使用腾讯接口。本地采集器
+可以继续独立运行，切回 StockDB 后立即恢复本地数据读取。
 
 编译检查：
 
@@ -105,7 +115,7 @@ swiftc -parse-as-library Sources/StockerCore/Models/*.swift \
 分组持久化和旧数据迁移检查：
 
 ```bash
-swiftc Sources/StockerMac/Models/StockModels.swift \
+swiftc -parse-as-library Sources/StockerMac/Models/StockModels.swift \
   Tests/GroupingChecks.swift -o .build/grouping-checks
 .build/grouping-checks
 ```
