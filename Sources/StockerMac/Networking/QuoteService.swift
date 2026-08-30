@@ -3,39 +3,29 @@ import Foundation
 
 actor QuoteService {
     private let session: URLSession
+    private let local = LocalStockDBClient.shared
 
-    init(session: URLSession = .shared) {
+    static func makeDefaultSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 15
+        return URLSession(configuration: configuration)
+    }
+
+    init(session: URLSession = QuoteService.makeDefaultSession()) {
         self.session = session
     }
 
     func fetchQuotes(for items: [WatchItem], provider: QuoteProvider) async throws -> [Quote] {
-        let groups = Dictionary(grouping: items, by: \.market)
-        return try await withThrowingTaskGroup(of: [Quote].self) { group in
-            for (market, marketItems) in groups where !marketItems.isEmpty {
-                group.addTask {
-                    try await self.fetchQuotes(
-                        codes: marketItems.map(\.code),
-                        market: market,
-                        provider: provider
-                    )
-                }
-            }
-
-            var result: [Quote] = []
-            for try await quotes in group { result.append(contentsOf: quotes) }
-            return result
-        }
+        _ = provider // 保留字段仅用于兼容旧设置；Mac 行情统一由本地 StockDB 提供。
+        return try await local.fetchQuotes(for: items)
     }
 
     func search(_ keyword: String, provider: QuoteProvider) async throws -> [SearchSuggestion] {
-        guard !keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
-        let urlString = provider == .sina
-            ? "https://suggest3.sinajs.cn/suggest/key=\(encoded)"
-            : "https://smartbox.gtimg.cn/s3/?v=2&t=all&c=1&q=\(encoded)"
-        guard let url = URL(string: urlString) else { throw QuoteServiceError.invalidURL }
-        let response = try await request(url, provider: provider)
-        return provider == .sina ? parseSinaSuggestions(response) : parseTencentSuggestions(response)
+        _ = provider
+        return try await local.search(keyword)
     }
 
     private func fetchQuotes(codes: [String], market: Market, provider: QuoteProvider) async throws -> [Quote] {

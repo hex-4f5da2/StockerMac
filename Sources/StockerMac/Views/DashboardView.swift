@@ -184,7 +184,8 @@ private struct QuoteTable: View {
         GeometryReader { geometry in
             let widths = QuoteTableColumnWidths(
                 total: max(620, geometry.size.width - 40),
-                includesPositions: store.showingPositionsOnly
+                includesPositions: store.showingPositionsOnly,
+                includesSubgroups: store.selectedGroupID != nil
             )
 
             ScrollView {
@@ -211,6 +212,10 @@ private struct QuoteTable: View {
                 title: "涨跌幅"
             )
             .frame(width: widths.change, alignment: .leading)
+            if store.selectedGroupID != nil {
+                Text("所属细分")
+                    .frame(width: widths.subgroup, alignment: .leading)
+            }
             if store.showingPositionsOnly {
                 Text("持仓市值")
                     .frame(width: widths.marketValue, alignment: .leading)
@@ -269,11 +274,22 @@ private struct QuoteTable: View {
                         )
                         .fontWeight(.semibold)
                     } else {
-                        Text("—").foregroundStyle(.secondary)
+                        Text("-").foregroundStyle(.secondary)
                     }
                 }
                 .monospacedDigit()
                 .frame(width: widths.change, alignment: .leading)
+
+                if store.selectedGroupID != nil {
+                    let subgroupText = subgroupNames(for: row.id).joined(separator: "、")
+                    Text(subgroupText.isEmpty ? "-" : subgroupText)
+                        .font(.caption)
+                        .foregroundStyle(subgroupText.isEmpty ? Color.secondary : Color.primary.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: widths.subgroup, alignment: .leading)
+                        .help(subgroupText)
+                }
 
                 if store.showingPositionsOnly {
                     Text(Formatters.compact(row.marketValue))
@@ -310,19 +326,18 @@ private struct QuoteTable: View {
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contextMenu {
-            if !store.groups.isEmpty {
+            if !store.groupSections.isEmpty {
                 Menu("加入分组") {
-                    ForEach(store.groups) { group in
-                        Button {
-                            store.toggleMembership(itemID: row.id, groupID: group.id)
-                        } label: {
-                            Label(
-                                group.name,
-                                systemImage: store.belongsToGroup(
-                                    itemID: row.id,
-                                    groupID: group.id
-                                ) ? "checkmark" : "folder"
-                            )
+                    ForEach(store.groupSections) { section in
+                        if section.children.isEmpty {
+                            membershipToggle(section.group, itemID: row.id)
+                        } else {
+                            Menu(section.group.name) {
+                                membershipToggle(section.group, itemID: row.id)
+                                ForEach(section.children) { child in
+                                    membershipToggle(child, itemID: row.id)
+                                }
+                            }
                         }
                     }
                 }
@@ -333,26 +348,55 @@ private struct QuoteTable: View {
             }
         }
     }
+
+    @ViewBuilder
+    private func membershipToggle(_ group: StockGroup, itemID: String) -> some View {
+        Button {
+            store.toggleMembership(itemID: itemID, groupID: group.id)
+        } label: {
+            Label(
+                group.name,
+                systemImage: store.belongsToGroup(itemID: itemID, groupID: group.id) ? "checkmark" : "folder"
+            )
+        }
+    }
+
+    /// 当前分组上下文（选中二级时以其父级为范围）下，该股票所属的二级分组名。
+    private func subgroupNames(for itemID: String) -> [String] {
+        guard let selectedGroupID = store.selectedGroupID else { return [] }
+        let primaryID = store.parentGroup(of: selectedGroupID)?.id ?? selectedGroupID
+        return store.subgroupNames(for: itemID, underPrimary: primaryID)
+    }
 }
 
 private struct QuoteTableColumnWidths {
     let stock: CGFloat
     let price: CGFloat
     let change: CGFloat
+    let subgroup: CGFloat
     let marketValue: CGFloat
     let profit: CGFloat
 
-    init(total: CGFloat, includesPositions: Bool) {
+    init(total: CGFloat, includesPositions: Bool, includesSubgroups: Bool = false) {
         if includesPositions {
             stock = total * 0.34
             price = total * 0.16
             change = total * 0.18
             marketValue = total * 0.17
             profit = total - stock - price - change - marketValue
+            subgroup = 0
+        } else if includesSubgroups {
+            stock = total * 0.34
+            price = total * 0.18
+            change = total * 0.18
+            subgroup = total - stock - price - change
+            marketValue = 0
+            profit = 0
         } else {
             stock = total * 0.42
             price = total * 0.24
             change = total - stock - price
+            subgroup = 0
             marketValue = 0
             profit = 0
         }

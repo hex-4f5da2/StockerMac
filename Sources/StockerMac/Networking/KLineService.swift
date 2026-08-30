@@ -3,15 +3,29 @@ import Foundation
 
 actor KLineService {
     private let session: URLSession
+    private let local = LocalStockDBClient.shared
     private var resolvedUSCodes: [String: String] = [:]
 
-    init(session: URLSession = .shared) {
+    static func makeDefaultSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 15
+        return URLSession(configuration: configuration)
+    }
+
+    init(session: URLSession = KLineService.makeDefaultSession()) {
         self.session = session
     }
 
     func fetchCandles(for item: WatchItem, period: KLinePeriod) async throws -> [KLineCandle] {
         guard period.isAvailable(for: item.market) else {
             throw KLineServiceError.unsupportedMarket
+        }
+
+        if item.market == .cn {
+            return try await local.fetchCandles(for: item, period: period)
         }
 
         let apiCode = try await apiCode(for: item)
@@ -53,6 +67,9 @@ actor KLineService {
     }
 
     func fetchOverview(for item: WatchItem) async throws -> MarketOverview {
+        if item.market == .cn {
+            return try await local.fetchOverview(for: item)
+        }
         let code: String
         switch item.market {
         case .cn: code = item.code.lowercased()

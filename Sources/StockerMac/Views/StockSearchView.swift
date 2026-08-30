@@ -34,8 +34,11 @@ struct StockSearchView: View {
                 Spacer()
                 Picker("加入分组", selection: $targetGroupID) {
                     Text("暂不分组").tag(Optional<UUID>.none)
-                    ForEach(store.groups) { group in
-                        Text(group.name).tag(Optional(group.id))
+                    ForEach(store.groupSections) { section in
+                        Text(section.group.name).tag(Optional(section.group.id))
+                        ForEach(section.children) { child in
+                            Text("\(section.group.name) / \(child.name)").tag(Optional(child.id))
+                        }
                     }
                 }
                 .labelsHidden()
@@ -47,7 +50,7 @@ struct StockSearchView: View {
 
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("例如：600000, 00700, AAPL", text: $keyword)
+                TextField("例如：600000、贵州茅台、gzmt", text: $keyword)
                     .textFieldStyle(.plain)
                     .focused($isKeywordFocused)
                     .onSubmit { submitSearchOrSelection() }
@@ -66,7 +69,7 @@ struct StockSearchView: View {
             Divider()
 
             if keyword.isEmpty {
-                ContentUnavailableView("搜索股票", systemImage: "text.magnifyingglass", description: Text("从 A 股、港股和美股中查找"))
+                ContentUnavailableView("搜索 A 股", systemImage: "text.magnifyingglass", description: Text("支持代码、中文名称、全拼和拼音首字母"))
             } else if results.isEmpty && !isSearching {
                 ContentUnavailableView.search(text: keyword)
             } else {

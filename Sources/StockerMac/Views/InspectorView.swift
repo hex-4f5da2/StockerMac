@@ -148,32 +148,49 @@ struct InspectorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            if store.groups.isEmpty {
+            if store.groupSections.isEmpty {
                 Label("在左侧边栏点击 + 新建分组", systemImage: "folder.badge.plus")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 118), spacing: 8)],
-                    alignment: .leading,
-                    spacing: 8
-                ) {
-                    ForEach(store.groups) { group in
-                        Toggle(isOn: Binding(
-                            get: { store.belongsToGroup(itemID: row.id, groupID: group.id) },
-                            set: { _ in store.toggleMembership(itemID: row.id, groupID: group.id) }
-                        )) {
-                            Text(group.name)
-                                .lineLimit(1)
-                                .help(group.name)
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(store.groupSections) { section in
+                        VStack(alignment: .leading, spacing: 6) {
+                            groupMembershipToggle(section.group, row: row)
+                            if !section.children.isEmpty {
+                                LazyVGrid(
+                                    columns: [GridItem(.adaptive(minimum: 108), spacing: 8)],
+                                    alignment: .leading,
+                                    spacing: 6
+                                ) {
+                                    ForEach(section.children) { child in
+                                        groupMembershipToggle(child, row: row)
+                                            .padding(.leading, 10)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
-                        .toggleStyle(.checkbox)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .stockerCard()
+    }
+
+    private func groupMembershipToggle(_ group: StockGroup, row: QuoteRow) -> some View {
+        Toggle(isOn: Binding(
+            get: { store.belongsToGroup(itemID: row.id, groupID: group.id) },
+            set: { _ in store.toggleMembership(itemID: row.id, groupID: group.id) }
+        )) {
+            Text(group.name)
+                .font(group.parentID == nil ? .callout.weight(.medium) : .callout)
+                .foregroundStyle(group.parentID == nil ? .primary : .secondary)
+                .lineLimit(1)
+                .help(group.name)
+        }
+        .toggleStyle(.checkbox)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func priceAlertCard(_ row: QuoteRow) -> some View {

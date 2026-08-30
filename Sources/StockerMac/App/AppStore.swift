@@ -19,6 +19,7 @@ final class AppStore: ObservableObject {
     @Published var items: [WatchItem]
     @Published var groups: [StockGroup]
     @Published private(set) var groupMemberships: [String: Set<UUID>]
+    @Published private(set) var groupSections: [GroupStrengthSection] = []
     @Published private(set) var positionHistory: [PositionHistoryRecord]
     @Published private(set) var stockPriceAlerts: [StockPriceAlert]
     @Published private(set) var groupAverageAlerts: [GroupAverageAlert]
@@ -43,13 +44,18 @@ final class AppStore: ObservableObject {
     private let notificationService = NotificationService()
     private let stateStore = StateStore()
     private var refreshTask: Task<Void, Never>?
+    private var persistDebounce: Task<Void, Never>?
+    /// 上次按强度重排分组的时间；与行情刷新解耦，每分钟最多重排一次。
+    private var lastGroupOrderingAt: Date?
 
     init() {
         let state = StateStore().load()
-        items = state.items
-        groups = state.groups
+        // 港美股枚举仍可解码旧数据，但本地行情版不再把它们载入产品界面。
+        let supportedItems = state.items.filter { $0.market == .cn }
+        items = supportedItems
+        groups = GroupOrdering.sanitizeGroups(state.groups)
         let validGroupIDs = Set(state.groups.map(\.id))
-        let validItemIDs = Set(state.items.map(\.id))
+        let validItemIDs = Set(supportedItems.map(\.id))
         groupMemberships = state.groupMemberships.reduce(into: [:]) { result, entry in
             guard validItemIDs.contains(entry.key) else { return }
             let validMemberships = entry.value.intersection(validGroupIDs)
@@ -67,6 +73,7 @@ final class AppStore: ObservableObject {
         refreshInterval = state.refreshInterval
         colorPreference = state.colorPreference
         statusBarDisplayMode = state.statusBarDisplayMode
+        rebuildGroupSections()
     }
 
     deinit { refreshTask?.cancel() }
@@ -92,7 +99,7 @@ final class AppStore: ObservableObject {
             .filter { !showingUngroupedOnly || groupIDs(for: $0.id).isEmpty }
             .filter { row in
                 guard let selectedGroupID else { return true }
-                return groupIDs(for: row.id).contains(selectedGroupID)
+                return !groupIDs(for: row.id).intersection(groupTreeIDs(selectedGroupID)).isEmpty
             }
     }
 
@@ -147,6 +154,10 @@ final class AppStore: ObservableObject {
             let fetched = try await service.fetchQuotes(for: quoteItems, provider: provider)
             quotes.merge(Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0) })) { _, new in new }
             await evaluateAlerts(at: Date())
+            if lastGroupOrderingAt == nil || Date().timeIntervalSince(lastGroupOrderingAt!) >= 60 {
+                rebuildGroupSections()
+                lastGroupOrderingAt = Date()
+            }
             lastUpdated = Date()
             errorMessage = nil
         } catch {
@@ -187,6 +198,7 @@ final class AppStore: ObservableObject {
     func add(_ suggestions: [SearchSuggestion], toGroup groupID: UUID? = nil) -> Set<String> {
         var knownIDs = Set(items.map(\.id))
         let newItems = suggestions.compactMap { suggestion -> WatchItem? in
+            guard suggestion.market == .cn else { return nil }
             guard knownIDs.insert(suggestion.id).inserted else { return nil }
             return WatchItem(code: suggestion.code, name: suggestion.name, market: suggestion.market)
         }
@@ -200,7 +212,8 @@ final class AppStore: ObservableObject {
             for item in newItems {
                 groupMemberships[item.id, default: []].insert(validGroupID)
             }
-            resetGroupAlertReferences(for: [validGroupID])
+            resetGroupAlertReferences(for: membershipAlertScope(for: validGroupID))
+            rebuildGroupSections()
             selectGroup(validGroupID)
         } else {
             let markets = Set(newItems.map(\.market))
@@ -221,7 +234,9 @@ final class AppStore: ObservableObject {
         let existingIDs = ids.intersection(items.map(\.id))
         guard !existingIDs.isEmpty else { return }
         let affectedGroupIDs = existingIDs.reduce(into: Set<UUID>()) { result, itemID in
-            result.formUnion(groupIDs(for: itemID))
+            for groupID in groupIDs(for: itemID) {
+                result.formUnion(membershipAlertScope(for: groupID))
+            }
         }
 
         items.removeAll { existingIDs.contains($0.id) }
@@ -231,18 +246,24 @@ final class AppStore: ObservableObject {
         }
         stockPriceAlerts.removeAll { existingIDs.contains($0.itemID) }
         resetGroupAlertReferences(for: affectedGroupIDs)
+        rebuildGroupSections()
         if let selectedID, existingIDs.contains(selectedID) { self.selectedID = nil }
         persist()
     }
 
     @discardableResult
-    func createGroup(named rawName: String) -> StockGroup? {
+    func createGroup(named rawName: String, parentID: UUID? = nil) -> StockGroup? {
         let name = normalizedGroupName(rawName)
         guard !name.isEmpty, !groups.contains(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) else {
             return nil
         }
-        let group = StockGroup(name: name)
+        // 父级必须存在且自身是一级分组，保证层级不超过两级
+        let validParentID = parentID.flatMap { requestedID in
+            groups.first { $0.id == requestedID && $0.parentID == nil }?.id
+        }
+        let group = StockGroup(name: name, parentID: validParentID)
         groups.append(group)
+        rebuildGroupSections()
         selectGroup(group.id)
         persist()
         return group
@@ -254,36 +275,60 @@ final class AppStore: ObservableObject {
               !groups.contains(where: { $0.id != id && $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }),
               let index = groups.firstIndex(where: { $0.id == id }) else { return false }
         groups[index].name = name
+        rebuildGroupSections()
         persist()
         return true
     }
 
+    func toggleGroupPinned(_ id: UUID) {
+        guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        groups[index].isPinned.toggle()
+        rebuildGroupSections()
+        persist()
+    }
+
+    /// 删除分组；删除一级分组会连带删除其全部二级分组。股票保留在自选中。
     func deleteGroup(_ id: UUID) {
-        groups.removeAll { $0.id == id }
-        groupAverageAlerts.removeAll { $0.groupID == id }
+        let removedIDs = groupTreeIDs(id)
+        guard !removedIDs.isEmpty else { return }
+        groups.removeAll { removedIDs.contains($0.id) }
+        groupAverageAlerts.removeAll { removedIDs.contains($0.groupID) }
         for itemID in Array(groupMemberships.keys) {
-            groupMemberships[itemID]?.remove(id)
+            groupMemberships[itemID]?.subtract(removedIDs)
             if groupMemberships[itemID]?.isEmpty == true { groupMemberships[itemID] = nil }
         }
-        if selectedGroupID == id { selectAll() }
+        if let selectedGroupID, removedIDs.contains(selectedGroupID) { selectAll() }
+        rebuildGroupSections()
         persist()
     }
 
-    func moveGroups(from offsets: IndexSet, to destination: Int) {
-        groups.move(fromOffsets: offsets, toOffset: destination)
-        persist()
-    }
+    /// 移动分组：parentID 指向目标一级分组（挂为其二级），nil 表示提升为一级。
+    /// 被移动的一级分组若自带二级，其二级自动升为一级；股票、均价提醒按分组 ID 自动跟随。
+    func moveGroup(_ id: UUID, underParent parentID: UUID?) {
+        guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        let oldParentID = groups[index].parentID
 
-    func moveGroup(_ id: UUID, by offset: Int) {
-        guard let sourceIndex = groups.firstIndex(where: { $0.id == id }) else { return }
-        let destinationIndex = sourceIndex + offset
-        guard groups.indices.contains(destinationIndex) else { return }
-        groups.swapAt(sourceIndex, destinationIndex)
-        persist()
-    }
+        if let parentID {
+            guard parentID != id,
+                  let parent = groups.first(where: { $0.id == parentID }),
+                  parent.parentID == nil,
+                  parentID != oldParentID else { return }
+            if oldParentID == nil {
+                for childIndex in groups.indices where groups[childIndex].parentID == id {
+                    groups[childIndex].parentID = nil
+                }
+            }
+            groups[index].parentID = parentID
+        } else {
+            guard oldParentID != nil else { return }
+            groups[index].parentID = nil
+        }
 
-    func sortGroups(by order: StockGroupSortOrder) {
-        groups = order.sorted(groups)
+        var affected = Set<UUID>([id])
+        if let oldParentID { affected.insert(oldParentID) }
+        if let parentID { affected.insert(parentID) }
+        resetGroupAlertReferences(for: affected)
+        rebuildGroupSections()
         persist()
     }
 
@@ -295,23 +340,61 @@ final class AppStore: ObservableObject {
         groupIDs(for: itemID).contains(groupID)
     }
 
+    /// 是否属于分组生效范围（一级 = 自身 + 全部二级）。
+    func belongsToGroupTree(itemID: String, groupID: UUID) -> Bool {
+        !groupIDs(for: itemID).intersection(groupTreeIDs(groupID)).isEmpty
+    }
+
+    func childGroups(of parentID: UUID) -> [StockGroup] {
+        groups.filter { $0.parentID == parentID }
+    }
+
+    func parentGroup(of groupID: UUID) -> StockGroup? {
+        guard let parentID = groups.first(where: { $0.id == groupID })?.parentID else { return nil }
+        return groups.first { $0.id == parentID }
+    }
+
+    func groupTreeIDs(_ groupID: UUID) -> Set<UUID> {
+        GroupOrdering.treeIDs(of: groupID, in: groups)
+    }
+
     func toggleMembership(itemID: String, groupID: UUID) {
         guard items.contains(where: { $0.id == itemID }), groups.contains(where: { $0.id == groupID }) else { return }
-        var memberships = groupMemberships[itemID] ?? []
+        var memberships = groupIDs(for: itemID)
         let wasMember = memberships.contains(groupID)
         if wasMember { memberships.remove(groupID) }
         else { memberships.insert(groupID) }
         groupMemberships[itemID] = memberships.isEmpty ? nil : memberships
-        resetGroupAlertReferences(for: [groupID])
-        if selectedID == itemID && ((selectedGroupID == groupID && wasMember) || (showingUngroupedOnly && !memberships.isEmpty)) {
-            selectedID = nil
+        resetGroupAlertReferences(for: membershipAlertScope(for: groupID))
+        if selectedID == itemID {
+            let stillInSelectedGroup = selectedGroupID.map { !memberships.intersection(groupTreeIDs($0)).isEmpty } ?? true
+            if !stillInSelectedGroup || (showingUngroupedOnly && !memberships.isEmpty) {
+                selectedID = nil
+            }
         }
+        rebuildGroupSections()
         persist()
     }
 
     func itemCount(in groupID: UUID) -> Int {
-        items.reduce(into: 0) { count, item in
-            if groupIDs(for: item.id).contains(groupID) { count += 1 }
+        GroupOrdering.memberCount(of: groupID, items: items, groups: groups, memberships: groupMemberships)
+    }
+
+    /// 一级分组下该股票直接所属的二级分组名，按侧边栏显示顺序返回。
+    func subgroupNames(for itemID: String, underPrimary primaryID: UUID) -> [String] {
+        let memberships = groupIDs(for: itemID)
+        guard let section = groupSections.first(where: { $0.group.id == primaryID }) else { return [] }
+        return section.children
+            .filter { memberships.contains($0.id) }
+            .map(\.name)
+    }
+
+    /// 小窗分组行情行：一级分组返回名下全部股票（含各二级）。
+    func rowsForGroup(_ groupID: UUID) -> [QuoteRow] {
+        let scope = groupTreeIDs(groupID)
+        guard !scope.isEmpty else { return [] }
+        return allRows.filter { row in
+            !groupIDs(for: row.id).intersection(scope).isEmpty
         }
     }
 
@@ -404,7 +487,12 @@ final class AppStore: ObservableObject {
         if showingTelegraph { return "电报" }
         if showingPositionsOnly { return "我的持仓" }
         if showingUngroupedOnly { return "未分组" }
-        if let selectedGroupID, let group = groups.first(where: { $0.id == selectedGroupID }) { return group.name }
+        if let selectedGroupID, let group = groups.first(where: { $0.id == selectedGroupID }) {
+            if let parent = parentGroup(of: selectedGroupID) {
+                return "\(parent.name) · \(group.name)"
+            }
+            return group.name
+        }
         return selectedMarket?.title ?? "市场总览"
     }
 
@@ -432,7 +520,8 @@ final class AppStore: ObservableObject {
     }
 
     func persist() {
-        stateStore.save(PersistedState(
+        persistDebounce?.cancel()
+        let snapshot = PersistedState(
             items: items,
             provider: provider,
             refreshInterval: refreshInterval,
@@ -443,16 +532,71 @@ final class AppStore: ObservableObject {
             positionHistory: positionHistory,
             stockPriceAlerts: stockPriceAlerts,
             groupAverageAlerts: groupAverageAlerts
-        ))
+        )
+        persistDebounce = Task { [stateStore] in
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled else { return }
+            await Task.detached(priority: .utility) {
+                if let data = try? JSONEncoder().encode(snapshot) {
+                    UserDefaults.standard.set(data, forKey: "StockerMac.PersistedState.v1")
+                }
+                _ = stateStore
+            }.value
+        }
     }
 
-    private func groupAveragePercentage(for groupID: UUID) -> Double? {
-        let percentages = items.compactMap { item -> Double? in
-            guard groupIDs(for: item.id).contains(groupID) else { return nil }
-            return quotes[item.id]?.percentage
+    /// 同步落盘，仅用于测试的确定性断言。
+    func flushPersistForTesting() {
+        persistDebounce?.cancel()
+        persistDebounce = nil
+        let snapshot = PersistedState(
+            items: items,
+            provider: provider,
+            refreshInterval: refreshInterval,
+            colorPreference: colorPreference,
+            statusBarDisplayMode: statusBarDisplayMode,
+            groups: groups,
+            groupMemberships: groupMemberships,
+            positionHistory: positionHistory,
+            stockPriceAlerts: stockPriceAlerts,
+            groupAverageAlerts: groupAverageAlerts
+        )
+        if let data = try? JSONEncoder().encode(snapshot) {
+            UserDefaults.standard.set(data, forKey: "StockerMac.PersistedState.v1")
         }
-        guard !percentages.isEmpty else { return nil }
-        return percentages.reduce(0, +) / Double(percentages.count)
+    }
+
+    /// 分组平均涨跌幅（等权）：一级 = 名下全部股票，二级 = 直接成员；无行情返回 nil。
+    func groupAveragePercentage(for groupID: UUID) -> Double? {
+        GroupOrdering.averagePercentage(
+            of: groupID,
+            items: items,
+            groups: groups,
+            memberships: groupMemberships,
+            quotes: quotes
+        )
+    }
+
+    /// 归属变化会影响的分组：自身 + 父级（二级变化会改变一级平均）。
+    private func membershipAlertScope(for groupID: UUID) -> Set<UUID> {
+        var ids = Set<UUID>([groupID])
+        if let parentID = groups.first(where: { $0.id == groupID })?.parentID {
+            ids.insert(parentID)
+        }
+        return ids
+    }
+
+    /// 按强度重建侧边栏分组块；排序只影响展示，不改动持久化的存储顺序。
+    private func rebuildGroupSections() {
+        let sections = GroupOrdering.buildSections(
+            items: items,
+            groups: groups,
+            memberships: groupMemberships,
+            quotes: quotes
+        )
+        withAnimation(.smooth(duration: 0.3)) {
+            groupSections = sections
+        }
     }
 
     private func resetGroupAlertReferences(for groupIDs: Set<UUID>) {
@@ -533,13 +677,8 @@ final class AppStore: ObservableObject {
 extension AppStore: WatchlistProviding {
     var watchlistCodes: [SecurityID] {
         items.compactMap { item in
-            let market: SecurityMarket
-            switch item.market {
-            case .cn: market = .cn
-            case .hk: market = .hk
-            case .us: market = .us
-            }
-            return SecurityID(market: market, code: item.code.uppercased())
+            guard item.market == .cn else { return nil }
+            return SecurityID(market: .cn, code: item.code.uppercased())
         }
     }
 }

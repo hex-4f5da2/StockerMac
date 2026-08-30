@@ -86,7 +86,7 @@ struct ContentView: View {
                     Button {
                         pendingCompactGroupID = compactGroupID.flatMap { id in
                             store.groups.contains(where: { $0.id == id }) ? id : nil
-                        } ?? store.groups.first?.id
+                        } ?? store.groupSections.first?.group.id
                         isShowingCompactGroupPicker = true
                     } label: {
                         Label("小窗模式", systemImage: "rectangle.compress.vertical")
@@ -113,6 +113,7 @@ private struct SidebarView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var telegraphVM: TelegraphViewModel
     @State private var isCreatingGroup = false
+    @State private var createGroupPresetParent: UUID?
     @State private var groupName = ""
     @State private var groupToRename: StockGroup?
     @State private var groupToDelete: StockGroup?
@@ -130,7 +131,7 @@ private struct SidebarView: View {
                     ) {
                         store.selectAll()
                     }
-                    ForEach(Market.allCases) { market in
+                    ForEach(Market.supportedCases) { market in
                         navRow(
                             market.title,
                             icon: icon(for: market),
@@ -165,36 +166,11 @@ private struct SidebarView: View {
 
                     groupSectionHeader
 
-                    if store.groups.isEmpty {
+                    if store.groupSections.isEmpty {
                         emptyGroupHint
                     } else {
-                        LazyVGrid(columns: groupColumns, spacing: 6) {
-                            ForEach(store.groups) { group in
-                                groupTile(group)
-                                    .contextMenu {
-                                        Button {
-                                            store.toggleGroupAverageAlert(group.id)
-                                        } label: {
-                                            Label(
-                                                store.hasGroupAverageAlert(group.id) ? "关闭平均涨跌幅提醒" : "开启平均涨跌幅提醒",
-                                                systemImage: store.hasGroupAverageAlert(group.id) ? "bell.slash" : "bell"
-                                            )
-                                        }
-                                        .disabled(store.itemCount(in: group.id) == 0)
-                                        Divider()
-                                        Button("上移") { store.moveGroup(group.id, by: -1) }
-                                            .disabled(group.id == store.groups.first?.id)
-                                        Button("下移") { store.moveGroup(group.id, by: 1) }
-                                            .disabled(group.id == store.groups.last?.id)
-                                        Divider()
-                                        Button("重命名") {
-                                            groupName = group.name
-                                            groupToRename = group
-                                        }
-                                        Divider()
-                                        Button("删除分组", role: .destructive) { groupToDelete = group }
-                                    }
-                            }
+                        ForEach(store.groupSections) { section in
+                            groupSectionBlock(section)
                         }
                     }
 
@@ -211,13 +187,8 @@ private struct SidebarView: View {
             refreshStatus
         }
         .navigationTitle("Stocker")
-        .alert("新建分组", isPresented: $isCreatingGroup) {
-            TextField("分组名称", text: $groupName)
-            Button("取消", role: .cancel) {}
-            Button("创建") { _ = store.createGroup(named: groupName) }
-                .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        } message: {
-            Text("分组名称最长 30 个字符，不能与已有分组重名。")
+        .sheet(isPresented: $isCreatingGroup) {
+            GroupCreateView(presetParentID: createGroupPresetParent)
         }
         .alert("重命名分组", isPresented: Binding(
             get: { groupToRename != nil },
@@ -241,8 +212,17 @@ private struct SidebarView: View {
                 groupToDelete = nil
             }
         } message: {
-            Text("股票不会从自选中删除，只会移除这个分组。")
+            Text(deleteGroupMessage)
         }
+    }
+
+    private var deleteGroupMessage: String {
+        guard let groupToDelete else { return "" }
+        let childCount = store.childGroups(of: groupToDelete.id).count
+        if childCount > 0 {
+            return "将同时删除其 \(childCount) 个二级分组。股票不会从自选中删除，只会移除分组关系。"
+        }
+        return "股票不会从自选中删除，只会移除这个分组。"
     }
 
     private var groupSectionHeader: some View {
@@ -251,14 +231,19 @@ private struct SidebarView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            Text("\(store.groups.count)")
+            Text("\(store.groupSections.count)")
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.tertiary)
 
             Spacer()
 
+            Image(systemName: "flame.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+                .help("按平均涨跌幅自动排序，每分钟更新一次；无行情的分组排在末尾")
+
             Button {
-                groupName = ""
+                createGroupPresetParent = nil
                 isCreatingGroup = true
             } label: {
                 Image(systemName: "plus")
@@ -268,80 +253,233 @@ private struct SidebarView: View {
             .buttonStyle(.plain)
             .foregroundStyle(StockerTheme.accent)
             .help("新建分组")
-
-            Menu {
-                Button("按名称升序") {
-                    store.sortGroups(by: .nameAscending)
-                }
-                Button("按名称降序") {
-                    store.sortGroups(by: .nameDescending)
-                }
-            } label: {
-                Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 9, weight: .medium))
-                    .frame(width: 18, height: 18)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .disabled(store.groups.count < 2)
-            .help("排序分组")
         }
         .padding(.top, 14)
         .padding(.bottom, 4)
         .padding(.horizontal, 8)
     }
 
-    private var groupColumns: [GridItem] {
-        [
-            GridItem(.flexible(), spacing: 6),
-            GridItem(.flexible(), spacing: 6),
-        ]
+    /// 分组块：一级行（点击聚合查看）+ 平铺的二级标签（点击直达），无需展开。
+    private func groupSectionBlock(_ section: GroupStrengthSection) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            primaryGroupRow(section)
+            if !section.children.isEmpty {
+                FlowLayout(spacing: 4) {
+                    ForEach(section.children) { child in
+                        secondaryGroupChip(child)
+                    }
+                }
+                .padding(.leading, 2)
+            }
+        }
+        .padding(.top, 3)
     }
 
-    private func groupTile(_ group: StockGroup) -> some View {
+    private func primaryGroupRow(_ section: GroupStrengthSection) -> some View {
+        let group = section.group
         let isSelected = store.selectedGroupID == group.id
+        let containsSelection = store.selectedGroupID.map { selectedID in
+            selectedID == group.id || section.children.contains { $0.id == selectedID }
+        } ?? false
+        let rowBackground = isSelected
+            ? StockerTheme.accent.opacity(0.16)
+            : (containsSelection ? StockerTheme.accent.opacity(0.07) : Color.primary.opacity(0.035))
+        let moveTargets = store.groupSections.map(\.group).filter { $0.id != group.id }
+
         return Button {
             store.selectGroup(group.id)
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Text(group.name)
-                    .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.88)
+                    .minimumScaleFactor(0.85)
                     .allowsTightening(true)
-                Spacer(minLength: 2)
+                if group.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 7))
+                        .foregroundStyle(StockerTheme.accent)
+                        .rotationEffect(.degrees(30))
+                }
                 if store.hasGroupAverageAlert(group.id) {
                     Image(systemName: "bell.fill")
                         .font(.system(size: 7.5))
                         .foregroundStyle(StockerTheme.accent)
                 }
-                Text("\(store.itemCount(in: group.id))")
+                Spacer(minLength: 4)
+                if let average = section.averagePercentage {
+                    TrendText(value: average, text: Formatters.percent(average))
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                } else {
+                    Text("-")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+                Text("\(section.memberCount)")
                     .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(isSelected ? StockerTheme.accent : .secondary)
+                    .foregroundStyle(isSelected || containsSelection ? StockerTheme.accent : .secondary)
                     .monospacedDigit()
             }
             .padding(.horizontal, 7)
-            .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34)
-            .background(
-                isSelected ? StockerTheme.accent.opacity(0.16) : Color.primary.opacity(0.035),
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
+            .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30)
+            .background(rowBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .stroke(
-                        isSelected ? StockerTheme.accent.opacity(0.35) : Color.primary.opacity(0.065),
-                        lineWidth: 0.7
+                        group.isPinned ? StockerTheme.accent.opacity(0.45) : (isSelected ? StockerTheme.accent.opacity(0.35) : Color.primary.opacity(0.065)),
+                        lineWidth: group.isPinned ? 1 : 0.7
                     )
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityValue("\(store.itemCount(in: group.id)) 只股票")
+        .contextMenu {
+            Button {
+                store.toggleGroupPinned(group.id)
+            } label: {
+                Label(
+                    group.isPinned ? "取消置顶锁定" : "置顶锁定",
+                    systemImage: group.isPinned ? "pin.slash" : "pin.fill"
+                )
+            }
+            Divider()
+            Button {
+                store.toggleGroupAverageAlert(group.id)
+            } label: {
+                Label(
+                    store.hasGroupAverageAlert(group.id) ? "关闭平均涨跌幅提醒" : "开启平均涨跌幅提醒",
+                    systemImage: store.hasGroupAverageAlert(group.id) ? "bell.slash" : "bell"
+                )
+            }
+            .disabled(section.memberCount == 0)
+            Divider()
+            Button {
+                createGroupPresetParent = group.id
+                isCreatingGroup = true
+            } label: {
+                Label("新建二级分组", systemImage: "folder.badge.plus")
+            }
+            Divider()
+            Menu {
+                ForEach(moveTargets) { target in
+                    Button(target.name) {
+                        store.moveGroup(group.id, underParent: target.id)
+                    }
+                }
+            } label: {
+                Label("移动分组到", systemImage: "arrow.down.right")
+            }
+            .disabled(moveTargets.isEmpty)
+            Divider()
+            Button("重命名") {
+                groupName = group.name
+                groupToRename = group
+            }
+            Divider()
+            Button("删除分组", role: .destructive) { groupToDelete = group }
+        }
+        .accessibilityValue("\(section.memberCount) 只股票，平均涨跌幅 \(section.averagePercentage.map(Formatters.percent) ?? "暂无行情")")
+    }
+
+    private func secondaryGroupChip(_ group: StockGroup) -> some View {
+        let isSelected = store.selectedGroupID == group.id
+        let average = store.groupAveragePercentage(for: group.id)
+        let moveTargets = store.groupSections.map(\.group).filter {
+            $0.id != group.id && $0.id != group.parentID
+        }
+
+        return Button {
+            store.selectGroup(group.id)
+        } label: {
+            HStack(spacing: 3) {
+                if group.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 6.5))
+                        .foregroundStyle(StockerTheme.accent)
+                        .rotationEffect(.degrees(30))
+                }
+                Text(group.name)
+                    .font(.system(size: 10, weight: isSelected ? .semibold : .medium))
+                    .lineLimit(1)
+                if let average {
+                    TrendText(value: average, text: Formatters.percent(average))
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                } else {
+                    Text("-")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 22)
+            .background(
+                group.isPinned ? StockerTheme.accent.opacity(0.14) : (isSelected ? StockerTheme.accent.opacity(0.18) : Color.primary.opacity(0.045)),
+                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(
+                        group.isPinned ? StockerTheme.accent.opacity(0.4) : (isSelected ? StockerTheme.accent.opacity(0.35) : Color.primary.opacity(0.06)),
+                        lineWidth: group.isPinned ? 0.9 : 0.6
+                    )
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                store.toggleGroupPinned(group.id)
+            } label: {
+                Label(
+                    group.isPinned ? "取消置顶锁定" : "置顶锁定",
+                    systemImage: group.isPinned ? "pin.slash" : "pin.fill"
+                )
+            }
+            Divider()
+            Button {
+                store.toggleGroupAverageAlert(group.id)
+            } label: {
+                Label(
+                    store.hasGroupAverageAlert(group.id) ? "关闭平均涨跌幅提醒" : "开启平均涨跌幅提醒",
+                    systemImage: store.hasGroupAverageAlert(group.id) ? "bell.slash" : "bell"
+                )
+            }
+            .disabled(store.itemCount(in: group.id) == 0)
+            Divider()
+            Menu {
+                Button {
+                    store.moveGroup(group.id, underParent: nil)
+                } label: {
+                    Label("作为一级分组", systemImage: "arrow.up.left")
+                }
+                if !moveTargets.isEmpty {
+                    Divider()
+                    ForEach(moveTargets) { target in
+                        Button(target.name) {
+                            store.moveGroup(group.id, underParent: target.id)
+                        }
+                    }
+                }
+            } label: {
+                Label("移动分组到", systemImage: "arrow.down.right")
+            }
+            Divider()
+            Button("重命名") {
+                groupName = group.name
+                groupToRename = group
+            }
+            Divider()
+            Button("删除分组", role: .destructive) { groupToDelete = group }
+        }
     }
 
     private var emptyGroupHint: some View {
         Button {
-            groupName = ""
+            createGroupPresetParent = nil
             isCreatingGroup = true
         } label: {
             HStack(spacing: 7) {
@@ -482,6 +620,135 @@ private struct SidebarView: View {
         case .cn: "building.columns"
         case .hk: "building.2"
         case .us: "globe.americas.fill"
+        }
+    }
+}
+
+/// 新建分组：选上级（无 = 一级分组）+ 名称，一次对话框覆盖两级创建。
+private struct GroupCreateView: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    let presetParentID: UUID?
+    @State private var name = ""
+    @State private var parentID: UUID?
+    @State private var showsInvalidHint = false
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("新建分组").font(.title2.bold())
+                Text("挂在一级分组下即成为二级分组；一级分组可聚合查看名下全部细分。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("上级分组")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Picker("上级分组", selection: $parentID) {
+                        Text("无（作为一级分组）").tag(Optional<UUID>.none)
+                        ForEach(store.groupSections) { section in
+                            Text(section.group.name).tag(Optional(section.group.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("分组名称")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    TextField("例如：电池、固态、锂矿", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(create)
+                }
+
+                if showsInvalidHint {
+                    Text("名称为空、超过 30 个字符，或与已有分组重名。")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(20)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("创建", action: create)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmedName.isEmpty)
+            }
+            .padding(16)
+        }
+        .frame(width: 380, height: 300)
+        .onAppear {
+            parentID = presetParentID.flatMap { id in
+                store.groups.first { $0.id == id && $0.parentID == nil }?.id
+            }
+        }
+    }
+
+    private func create() {
+        guard store.createGroup(named: name, parentID: parentID) != nil else {
+            showsInvalidHint = true
+            return
+        }
+        dismiss()
+    }
+}
+
+/// 横向流式布局：放不下自动换行，用于二级分组标签。
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        let width = maxWidth.isFinite ? maxWidth : max(0, x - spacing)
+        return CGSize(width: width, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }

@@ -25,7 +25,7 @@ enum AddToGroupChecks {
         let store = AppStore()
         let suggestions = [
             SearchSuggestion(code: "SH600000", name: "浦发银行", market: .cn),
-            SearchSuggestion(code: "AAPL", name: "Apple", market: .us)
+            SearchSuggestion(code: "SH600519", name: "贵州茅台", market: .cn)
         ]
         let addedIDs = store.add(suggestions, toGroup: focus.id)
 
@@ -35,6 +35,7 @@ enum AddToGroupChecks {
         precondition(store.rows.map(\.id) == suggestions.map(\.id))
         precondition(suggestions.allSatisfy { store.belongsToGroup(itemID: $0.id, groupID: focus.id) })
 
+        store.flushPersistForTesting()
         let saved = try! JSONDecoder().decode(PersistedState.self, from: defaults.data(forKey: key)!)
         precondition(suggestions.allSatisfy { saved.groupMemberships[$0.id] == [focus.id] })
 

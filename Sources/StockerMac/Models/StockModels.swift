@@ -5,6 +5,9 @@ enum Market: String, Codable, CaseIterable, Identifiable, Sendable {
     case hk
     case us
 
+    /// 港美股 case 仅保留用于无损解码旧配置；当前产品只展示 A 股。
+    static let supportedCases: [Market] = [.cn]
+
     var id: String { rawValue }
 
     var title: String {
@@ -93,32 +96,28 @@ struct WatchItem: Codable, Hashable, Identifiable, Sendable {
 struct StockGroup: Codable, Hashable, Identifiable, Sendable {
     let id: UUID
     var name: String
+    /// 上级分组 ID；nil = 一级分组。父级必须是一级分组，保证层级最多两级。
+    var parentID: UUID?
+    /// 置顶锁定：不参与强度动态排序，固定排在同层最前。
+    var isPinned: Bool
 
-    init(id: UUID = UUID(), name: String) {
+    init(id: UUID = UUID(), name: String, parentID: UUID? = nil, isPinned: Bool = false) {
         self.id = id
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.parentID = parentID
+        self.isPinned = isPinned
     }
 
-    var sidebarID: String { "group:\(id.uuidString)" }
-}
+    private enum CodingKeys: String, CodingKey {
+        case id, name, parentID, isPinned
+    }
 
-enum StockGroupSortOrder: Sendable {
-    case nameAscending
-    case nameDescending
-
-    func sorted(_ groups: [StockGroup]) -> [StockGroup] {
-        groups.sorted { lhs, rhs in
-            let comparison = lhs.name.localizedStandardCompare(rhs.name)
-            if comparison == .orderedSame {
-                return lhs.id.uuidString < rhs.id.uuidString
-            }
-            switch self {
-            case .nameAscending:
-                return comparison == .orderedAscending
-            case .nameDescending:
-                return comparison == .orderedDescending
-            }
-        }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        parentID = try container.decodeIfPresent(UUID.self, forKey: .parentID)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 }
 
@@ -358,12 +357,10 @@ struct PersistedState: Codable, Sendable {
     static let initial = PersistedState(
         items: [
             WatchItem(code: "SH000001", name: "上证指数", market: .cn),
-            WatchItem(code: "SZ399006", name: "创业板指", market: .cn),
-            WatchItem(code: "00700", name: "腾讯控股", market: .hk),
-            WatchItem(code: "AAPL", name: "苹果", market: .us)
+            WatchItem(code: "SZ399006", name: "创业板指", market: .cn)
         ],
         provider: .sina,
-        refreshInterval: 10,
+        refreshInterval: 5,
         colorPreference: .redUp,
         statusBarDisplayMode: .ticker,
         groups: [],

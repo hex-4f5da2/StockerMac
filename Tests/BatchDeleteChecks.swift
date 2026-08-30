@@ -14,7 +14,7 @@ enum BatchDeleteChecks {
 
         let group = StockGroup(name: "测试分组")
         let first = WatchItem(code: "SH600000", name: "浦发银行", market: .cn, costPrice: 8, quantity: 100)
-        let second = WatchItem(code: "AAPL", name: "Apple", market: .us)
+        let second = WatchItem(code: "SH600519", name: "贵州茅台", market: .cn)
         let initial = PersistedState(
             items: [first, second],
             provider: .tencent,
@@ -34,6 +34,7 @@ enum BatchDeleteChecks {
         precondition(store.groupIDs(for: first.id).isEmpty)
         precondition(store.groupIDs(for: second.id) == [group.id])
 
+        store.flushPersistForTesting()
         let saved = try! JSONDecoder().decode(PersistedState.self, from: defaults.data(forKey: key)!)
         precondition(saved.items.map(\.id) == [second.id])
         precondition(saved.groupMemberships[first.id] == nil)
@@ -52,6 +53,7 @@ enum BatchDeleteChecks {
         precondition(store.items[0].quantity == 0)
         precondition(store.groupIDs(for: second.id) == [group.id])
 
+        store.flushPersistForTesting()
         let clearedState = try! JSONDecoder().decode(PersistedState.self, from: defaults.data(forKey: key)!)
         precondition(clearedState.items.map(\.id) == [second.id])
         precondition(clearedState.positionHistory == [record].compactMap { $0 })

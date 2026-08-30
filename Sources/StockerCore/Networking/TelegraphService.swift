@@ -50,7 +50,16 @@ public actor TelegraphService: TelegraphServiceProviding {
     private let session: URLSession
     private let clsSigner: CLSSignature
 
-    public init(session: URLSession = .shared, clsSigner: CLSSignature = .live) {
+    public static func makeDefaultSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 15
+        return URLSession(configuration: configuration)
+    }
+
+    public init(session: URLSession = TelegraphService.makeDefaultSession(), clsSigner: CLSSignature = .live) {
         self.session = session
         self.clsSigner = clsSigner
     }

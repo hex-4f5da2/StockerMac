@@ -5,32 +5,58 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var telegraphVM: TelegraphViewModel
+    @State private var cacheSizeText = CacheManager.formattedCacheSize()
+    @State private var isCleaningCache = false
+    @State private var cacheCleanedMessage: String?
 
     var body: some View {
         Form {
-            Picker("行情数据源", selection: $store.provider) {
-                ForEach(QuoteProvider.allCases) { Text($0.title).tag($0) }
-            }
-            .onChange(of: store.provider) { _, _ in store.restartRefreshLoop() }
-
-            Picker("涨跌颜色", selection: $store.colorPreference) {
-                ForEach(ColorSchemePreference.allCases) { Text($0.title).tag($0) }
-            }
-            .onChange(of: store.colorPreference) { _, _ in store.persist() }
-
-            Picker("菜单栏待机", selection: $store.statusBarDisplayMode) {
-                ForEach(StatusBarDisplayMode.allCases) { Text($0.title).tag($0) }
-            }
-            .onChange(of: store.statusBarDisplayMode) { _, _ in store.persist() }
-
-            VStack(alignment: .leading) {
-                HStack {
-                    Text("自动刷新")
-                    Spacer()
-                    Text("\(Int(store.refreshInterval)) 秒").foregroundStyle(.secondary)
+            Section("通用") {
+                LabeledContent("行情数据源") {
+                    Text("本地 StockDB")
+                        .foregroundStyle(.secondary)
                 }
-                Slider(value: $store.refreshInterval, in: 5...60, step: 5)
-                    .onChange(of: store.refreshInterval) { _, _ in store.restartRefreshLoop() }
+
+                Picker("涨跌颜色", selection: $store.colorPreference) {
+                    ForEach(ColorSchemePreference.allCases) { Text($0.title).tag($0) }
+                }
+                .onChange(of: store.colorPreference) { _, _ in store.persist() }
+
+                Picker("菜单栏待机", selection: $store.statusBarDisplayMode) {
+                    ForEach(StatusBarDisplayMode.allCases) { Text($0.title).tag($0) }
+                }
+                .onChange(of: store.statusBarDisplayMode) { _, _ in store.persist() }
+
+                VStack(alignment: .leading) {
+                    HStack {
+                        Text("自动刷新")
+                        Spacer()
+                        Text("\(Int(store.refreshInterval)) 秒").foregroundStyle(.secondary)
+                    }
+                    Slider(value: $store.refreshInterval, in: 5...60, step: 5)
+                        .onChange(of: store.refreshInterval) { _, _ in store.restartRefreshLoop() }
+                }
+            }
+
+            Section("存储与缓存") {
+                HStack {
+                    Text("网络临时缓存")
+                    Spacer()
+                    Text(cacheSizeText)
+                        .foregroundStyle(.secondary)
+                    Button(isCleaningCache ? "清理中…" : "立即清理") {
+                        cleanCache()
+                    }
+                    .disabled(isCleaningCache)
+                }
+                if let cacheCleanedMessage {
+                    Text(cacheCleanedMessage)
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+                Text("清理缓存仅清除网络临时响应缓存，不会影响自选股、持仓、分组及提醒设置等个人数据。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if AppStore.telegraphEnabled {
@@ -79,9 +105,20 @@ struct SettingsView: View {
         .frame(width: 480)
         .navigationTitle("Stocker 设置")
         .task {
+            cacheSizeText = CacheManager.formattedCacheSize()
             guard AppStore.telegraphEnabled else { return }
             let service = NotificationService()
             telegraphVM.refreshAuthorizationStatus(actual: await service.authorizationStatus())
+        }
+    }
+
+    private func cleanCache() {
+        isCleaningCache = true
+        CacheManager.clearCache()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            cacheSizeText = CacheManager.formattedCacheSize()
+            isCleaningCache = false
+            cacheCleanedMessage = "缓存已清理完成"
         }
     }
 

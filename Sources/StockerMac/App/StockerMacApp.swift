@@ -124,7 +124,15 @@ struct StockerMacApp: App {
 final class StockerAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
-        // UserNotifications 仅在 app bundle 上下文可用（swift run 直接运行二进制时无 bundle）
+        // 仅在非 app bundle（如命令行 swift run）时动态设置图标；
+        // 打包的 .app 必须由系统通过 Info.plist 原生加载 AppIcon.icns，
+        // 否则运行时设置 applicationIconImage 会被 macOS 强制套上系统默认白底圆角框导致出现双层白边。
+        if Bundle.main.bundleIdentifier == nil {
+            if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+               let iconImage = NSImage(contentsOf: iconURL) {
+                NSApp.applicationIconImage = iconImage
+            }
+        }
         if Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
         }

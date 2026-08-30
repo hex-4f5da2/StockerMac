@@ -14,9 +14,7 @@ struct CompactGroupView: View {
     }
 
     private var rows: [QuoteRow] {
-        percentageSortMode.sorted(
-            store.allRows.filter { store.belongsToGroup(itemID: $0.id, groupID: groupID) }
-        )
+        percentageSortMode.sorted(store.rowsForGroup(groupID))
     }
 
     private let nameColumnWidth: CGFloat = 82
@@ -140,23 +138,27 @@ struct CompactGroupPickerView: View {
 
             Divider()
 
-            if store.groups.isEmpty {
+            if store.groupSections.isEmpty {
                 ContentUnavailableView("还没有分组", systemImage: "folder.badge.plus", description: Text("请先在左侧边栏创建分组"))
             } else {
-                List(store.groups, selection: $selection) { group in
-                    HStack {
-                        Label(group.name, systemImage: "folder")
-                        Spacer()
-                        Text("\(store.itemCount(in: group.id)) 只")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if selection == group.id {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(StockerTheme.accent)
+                List(selection: $selection) {
+                    ForEach(store.groupSections) { section in
+                        compactGroupRow(
+                            name: section.group.name,
+                            icon: "folder",
+                            count: section.memberCount,
+                            tag: section.group.id
+                        )
+                        ForEach(section.children) { child in
+                            compactGroupRow(
+                                name: child.name,
+                                icon: "tag",
+                                count: store.itemCount(in: child.id),
+                                tag: child.id
+                            )
+                            .padding(.leading, 16)
                         }
                     }
-                    .contentShape(Rectangle())
-                    .tag(group.id)
                 }
                 .listStyle(.inset)
             }
@@ -175,8 +177,29 @@ struct CompactGroupPickerView: View {
         }
         .frame(width: 460, height: 420)
         .onAppear {
-            if selection == nil { selection = store.groups.first?.id }
+            if selection == nil { selection = store.groupSections.first?.group.id }
         }
+    }
+
+    private func compactGroupRow(name: String, icon: String, count: Int, tag: UUID) -> some View {
+        HStack {
+            Label {
+                Text(name)
+            } icon: {
+                Image(systemName: icon)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("\(count) 只")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if selection == tag {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(StockerTheme.accent)
+            }
+        }
+        .contentShape(Rectangle())
+        .tag(tag)
     }
 }
 

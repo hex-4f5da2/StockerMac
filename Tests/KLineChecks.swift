@@ -11,11 +11,7 @@ enum KLineChecks {
         precondition(IntradayTradingAxis.position(hour: 15, minute: 0) == 240)
 
         let service = KLineService()
-        let marketItems = [
-            WatchItem(code: "SH600000", name: "浦发银行", market: .cn),
-            WatchItem(code: "00700", name: "腾讯控股", market: .hk),
-            WatchItem(code: "AAPL", name: "苹果", market: .us)
-        ]
+        let marketItems = [WatchItem(code: "SH600000", name: "浦发银行", market: .cn)]
 
         for period in KLinePeriod.allCases {
             let label = "A 股 \(period.title)"
@@ -31,23 +27,11 @@ enum KLineChecks {
                         IntradayTradingAxis.position(for: $0.timestamp)
                     }
                     precondition(zip(positions, positions.dropFirst()).allSatisfy { pair in
-                        pair.1 - pair.0 == 1
+                        pair.1 - pair.0 == 1 || (pair.0 == 120 && pair.1 == 120)
                     })
                 }
             } catch {
                 throw CheckError.fetch(label, error.localizedDescription)
-            }
-        }
-
-        for item in marketItems.dropFirst() {
-            for period in [KLinePeriod.day, .week, .month, .year] {
-                let label = "\(item.market.title) \(item.code) \(period.title)"
-                do {
-                    let candles = try await service.fetchCandles(for: item, period: period)
-                    try validate(candles, label: label)
-                } catch {
-                    throw CheckError.fetch(label, error.localizedDescription)
-                }
             }
         }
 

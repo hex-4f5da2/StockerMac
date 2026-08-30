@@ -166,15 +166,10 @@ struct TelegraphDetailView: View {
     }
 
     private func openQuote(_ security: SecurityID) {
-        let market: Market
-        switch security.market {
-        case .cn: market = .cn
-        case .hk: market = .hk
-        case .us: market = .us
-        }
-        guard let item = store.items.first(where: { $0.market == market && $0.code == security.code }) else { return }
+        guard security.market == .cn,
+              let item = store.items.first(where: { $0.market == .cn && $0.code == security.code }) else { return }
         store.selectAll()
-        store.selectedMarket = market
+        store.selectedMarket = .cn
         store.selectedID = item.id
     }
 
